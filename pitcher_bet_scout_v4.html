@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pitcher Bet Scout v3</title>
+<style>
+/* system fonts — no external dependency */
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+
+:root{
+  --bg:#08090d;
+  --s1:#0f1118;
+  --s2:#161b27;
+  --s3:#1e2535;
+  --border:rgba(255,255,255,0.07);
+  --border2:rgba(255,255,255,0.13);
+  --text:#dde3f0;
+  --muted:#7a8499;
+  --dim:#4a5268;
+  --green:#00d98b;
+  --blue:#3d9eff;
+  --amber:#f5a623;
+  --red:#ff5252;
+  --mono:'Courier New',Courier,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+}
+
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;font-size:15px;}
+
+/* ── Header ── */
+.header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 28px;
+  background:var(--s1);
+  border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:100;
+}
+.header-left{display:flex;align-items:center;gap:12px;}
+.logo{
+  width:32px;height:32px;border-radius:7px;
+  background:var(--green);display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:15px;font-weight:600;color:#000;flex-shrink:0;
+}
+.app-name{font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:0.05em;}
+.app-sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:6px;}
+.header-right{display:flex;align-items:center;gap:10px;}
+
+/* ── API key bar ── */
+.key-bar{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 28px;
+  background:var(--s1);border-bottom:1px solid var(--border);
+}
+.key-bar label{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;color:var(--muted);white-space:nowrap;margin:0;}
+.key-bar input{
+  flex:1;background:var(--s2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;
+  outline:none;transition:border-color 0.15s;
+}
+.key-bar input:focus{border-color:var(--green);}
+.key-status{
+  font-family:var(--mono);font-size:10px;padding:4px 9px;border-radius:5px;
+  white-space:nowrap;border:1px solid transparent;
+}
+.key-status.ok{color:var(--green);background:rgba(0,217,139,0.08);border-color:rgba(0,217,139,0.2);}
+.key-status.bad{color:var(--amber);background:rgba(245,166,35,0.08);border-color:rgba(245,166,35,0.2);}
+
+/* ── Disclaimer ── */
+.disclaimer{
+  margin:16px 28px 0;padding:9px 14px;
+  background:rgba(245,166,35,0.06);border:1px solid rgba(245,166,35,0.18);
+  border-radius:7px;font-size:12px;color:var(--amber);line-height:1.5;
+}
+
+/* ── Main layout ── */
+.main{display:grid;grid-template-columns:300px 1fr;gap:0;min-height:calc(100vh - 120px);}
+@media(max-width:780px){.main{grid-template-columns:1fr;}}
+
+/* ── Sidebar ── */
+.sidebar{
+  border-right:1px solid var(--border);
+  padding:20px;
+  background:var(--s1);
+  display:flex;flex-direction:column;gap:20px;
+}
+.sidebar-section{}
+.sec-label{
+  font-family:var(--mono);font-size:10px;letter-spacing:0.1em;
+  color:var(--dim);text-transform:uppercase;margin-bottom:12px;
+}
+
+/* Scrape status */
+.scrape-box{
+  background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:14px;
+}
+.scrape-status{font-size:13px;color:var(--muted);margin-bottom:10px;line-height:1.5;}
+.scrape-status.loaded{color:var(--green);}
+.scrape-status.error{color:var(--red);}
+.matchup-count{
+  font-family:var(--mono);font-size:22px;font-weight:600;color:var(--green);
+  margin-bottom:2px;
+}
+.matchup-list{
+  margin-top:10px;max-height:220px;overflow-y:auto;
+  display:flex;flex-direction:column;gap:5px;
+}
+.matchup-pill{
+  font-size:11px;padding:5px 8px;background:var(--s3);
+  border-radius:5px;color:var(--text);font-family:var(--mono);
+  border:1px solid var(--border);white-space:normal;overflow:visible;
+  word-break:break-word;line-height:1.4;
+}
+
+/* Bet type chips */
+.bet-chips{display:flex;flex-direction:column;gap:7px;}
+.chip{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;background:var(--s2);border:1px solid var(--border);
+  border-radius:7px;cursor:pointer;transition:border-color 0.15s,background 0.15s;
+  user-select:none;
+}
+.chip.on{border-color:var(--green);background:rgba(0,217,139,0.05);}
+.chip-dot{
+  width:13px;height:13px;border-radius:50%;border:1.5px solid var(--dim);
+  flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  transition:border-color 0.15s,background 0.15s;
+}
+.chip.on .chip-dot{border-color:var(--green);background:var(--green);}
+.chip-dot-inner{width:5px;height:5px;border-radius:50%;background:#000;display:none;}
+.chip.on .chip-dot-inner{display:block;}
+.chip-text{flex:1;}
+.chip-name{font-size:13px;font-weight:500;}
+.chip-hint{font-size:11px;color:var(--muted);margin-top:1px;}
+
+/* Betting context */
+.ctx-input{
+  width:100%;background:var(--s2);border:1px solid var(--border);border-radius:7px;
+  color:var(--text);font-family:var(--sans);font-size:13px;padding:9px 11px;
+  outline:none;resize:vertical;min-height:70px;line-height:1.5;
+  transition:border-color 0.15s;
+}
+.ctx-input:focus{border-color:var(--green);}
+
+/* Buttons */
+.btn-scrape,.btn-analyze,.btn-export{
+  width:100%;padding:11px;border:none;border-radius:7px;cursor:pointer;
+  font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.06em;
+  transition:opacity 0.15s,transform 0.1s;
+}
+.btn-scrape{background:var(--s3);color:var(--text);border:1px solid var(--border2);}
+.btn-scrape:hover{border-color:var(--green);color:var(--green);}
+.btn-analyze{background:var(--green);color:#000;}
+.btn-analyze:hover{opacity:0.9;}
+.btn-analyze:active,.btn-scrape:active{transform:scale(0.98);}
+.btn-analyze:disabled,.btn-scrape:disabled{opacity:0.35;cursor:not-allowed;}
+.btn-export{
+  background:transparent;color:var(--blue);
+  border:1px solid rgba(61,158,255,0.3);font-size:11px;
+  display:none;
+}
+.btn-export.visible{display:block;}
+.btn-export:hover{background:rgba(61,158,255,0.07);}
+
+/* ── Results panel ── */
+.results{padding:24px 28px;display:flex;flex-direction:column;gap:0;}
+.results-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:18px;
+}
+.status-row{display:flex;align-items:center;gap:10px;}
+.status-txt{font-family:var(--mono);font-size:12px;color:var(--muted);}
+.status-txt.live{color:var(--green);}
+.timer{
+  font-family:var(--mono);font-size:11px;color:var(--green);
+  background:rgba(0,217,139,0.08);border:1px solid rgba(0,217,139,0.2);
+  border-radius:5px;padding:2px 8px;display:none;white-space:nowrap;
+}
+.timer.on{display:block;}
+
+/* Empty state */
+.empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:400px;gap:14px;color:var(--dim);text-align:center;
+}
+.empty-ring{
+  width:56px;height:56px;border-radius:50%;border:1.5px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+}
+.empty-txt{font-size:13px;line-height:1.6;}
+
+/* Cards */
+.cards-wrap{display:flex;flex-direction:column;gap:16px;}
+
+.game-card{
+  background:var(--s1);border:1px solid var(--border);border-radius:10px;
+  overflow:visible;writing-mode:horizontal-tb;
+}
+.game-card.best{border-color:var(--green);}
+
+.card-head{
+  padding:14px 18px 12px;border-bottom:1px solid var(--border);
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+}
+.card-title{font-size:14px;font-weight:600;line-height:1.4;flex:1;}
+.best-badge{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;
+  color:var(--green);background:rgba(0,217,139,0.1);
+  border:1px solid rgba(0,217,139,0.3);border-radius:4px;
+  padding:3px 7px;white-space:nowrap;flex-shrink:0;
+}
+
+.card-body{padding:14px 18px;}
+
+.stat-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:0;
+  border:1px solid var(--border);border-radius:7px;overflow:hidden;
+  margin-bottom:12px;
+}
+.stat-row2{
+  display:flex;flex-direction:column;
+  padding:8px 10px;border-bottom:1px solid var(--border);
+  border-right:1px solid var(--border);
+}
+.stat-row2:nth-child(even){border-right:none;}
+.stat-row2:nth-last-child(-n+2){border-bottom:none;}
+.stat-key{font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:2px;letter-spacing:0.05em;}
+.stat-val{font-size:13px;font-weight:500;color:var(--text);word-break:break-word;}
+
+.full-row{
+  grid-column:1/-1;
+  border-right:none !important;
+  border-bottom:1px solid var(--border) !important;
+}
+.full-row:last-child{border-bottom:none !important;}
+
+.analysis-block{
+  font-size:13px;color:var(--muted);line-height:1.7;
+  padding:10px 0 4px;border-top:1px solid var(--border);margin-top:4px;
+}
+
+.recs-label{
+  font-family:var(--mono);font-size:10px;letter-spacing:0.1em;
+  color:var(--dim);text-transform:uppercase;margin:12px 0 6px;
+}
+.recs-list{display:flex;flex-direction:column;gap:6px;}
+
+.rec{
+  display:flex;flex-direction:column;gap:2px;
+  padding:8px 12px;border-radius:6px;border-left:3px solid var(--border2);
+  background:var(--s2);font-size:13px;line-height:1.5;
+}
+.rec.ov{border-left-color:var(--green);}
+.rec.un{border-left-color:var(--blue);}
+.rec.ml{border-left-color:var(--amber);}
+.rec.gen{border-left-color:var(--dim);}
+.rec-type{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;
+  text-transform:uppercase;margin-bottom:1px;
+}
+.rec.ov .rec-type{color:var(--green);}
+.rec.un .rec-type{color:var(--blue);}
+.rec.ml .rec-type{color:var(--amber);}
+.rec.gen .rec-type{color:var(--dim);}
+.rec-body{color:var(--text);}
+
+.conf-row{
+  display:flex;align-items:center;gap:8px;margin-top:10px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+}
+.conf-stars{color:var(--amber);}
+
+/* Spinner */
+.spin{
+  display:inline-block;width:12px;height:12px;
+  border:2px solid var(--border2);border-top-color:var(--green);
+  border-radius:50%;animation:rot 0.7s linear infinite;
+  vertical-align:middle;margin-right:6px;
+}
+@keyframes rot{to{transform:rotate(360deg);}}
+
+.err-box{
+  color:var(--red);font-size:13px;padding:14px 16px;
+  background:rgba(255,82,82,0.06);border:1px solid rgba(255,82,82,0.18);
+  border-radius:8px;line-height:1.6;
+}
+.err-box a{color:var(--blue);}
+
+/* ── Tabs ── */
+.tab-nav{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--s1);padding:0 28px;}
+.tab-btn{font-family:var(--mono);font-size:11px;letter-spacing:0.08em;padding:12px 18px;cursor:pointer;border:none;background:none;color:var(--muted);border-bottom:2px solid transparent;transition:color 0.15s,border-color 0.15s;text-transform:uppercase;}
+.tab-btn.active{color:var(--green);border-bottom-color:var(--green);}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
+
+/* ── Tracker ── */
+.tracker-wrap{padding:24px 28px;max-width:1100px;margin:0 auto;}
+.stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:24px;}
+.stat-card{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:14px 16px;}
+.stat-card-val{font-family:var(--mono);font-size:24px;font-weight:600;margin-bottom:2px;}
+.stat-card-label{font-size:11px;color:var(--muted);}
+.tracker-section-label{font-family:var(--mono);font-size:10px;letter-spacing:0.1em;color:var(--dim);text-transform:uppercase;margin-bottom:10px;}
+.bets-table{width:100%;border-collapse:collapse;font-size:12px;}
+.bets-table th{font-family:var(--mono);font-size:10px;letter-spacing:0.08em;color:var(--dim);text-transform:uppercase;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border2);}
+.bets-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle;color:var(--text);}
+.bets-table tr:hover td{background:var(--s2);}
+.result-btn{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.06em;padding:4px 9px;border-radius:5px;border:1px solid var(--border2);cursor:pointer;background:transparent;color:var(--muted);transition:all 0.15s;}
+.result-btn:hover{opacity:0.8;}
+.result-btn.W{background:rgba(0,217,139,0.15);border-color:var(--green);color:var(--green);}
+.result-btn.L{background:rgba(255,82,82,0.15);border-color:var(--red);color:var(--red);}
+.result-btn.P{background:rgba(122,132,153,0.15);border-color:var(--muted);color:var(--muted);}
+.result-btn.active-W{background:var(--green);color:#000;border-color:var(--green);}
+.result-btn.active-L{background:var(--red);color:#fff;border-color:var(--red);}
+.result-btn.active-P{background:var(--muted);color:#000;border-color:var(--muted);}
+.conf-badge{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid var(--border2);}
+.conf-badge.c5,.conf-badge.c4{color:var(--green);border-color:rgba(0,217,139,0.3);background:rgba(0,217,139,0.08);}
+.conf-badge.c3{color:var(--amber);border-color:rgba(245,166,35,0.3);background:rgba(245,166,35,0.08);}
+.conf-badge.c2,.conf-badge.c1{color:var(--red);border-color:rgba(255,82,82,0.3);background:rgba(255,82,82,0.08);}
+.type-badge{font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:4px;background:var(--s3);color:var(--muted);border:1px solid var(--border);}
+.perf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:24px;}
+.perf-card{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:14px;}
+.perf-card-title{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;}
+.perf-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);}
+.perf-row:last-child{border-bottom:none;}
+.perf-row-label{color:var(--muted);}
+.perf-row-val{font-family:var(--mono);font-weight:600;}
+.empty-tracker{text-align:center;padding:60px 20px;color:var(--dim);font-size:13px;line-height:1.8;}
+.btn-clear{font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:5px;border:1px solid rgba(255,82,82,0.3);background:rgba(255,82,82,0.06);color:var(--red);cursor:pointer;letter-spacing:0.06em;}
+.btn-clear:hover{background:rgba(255,82,82,0.15);}
+.pending-dot{width:7px;height:7px;border-radius:50%;background:var(--amber);display:inline-block;margin-right:5px;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="logo">⚾</div>
+    <div>
+      <span class="app-name">Pitcher Bet Scout</span>
+      <span class="app-sub">// v2 · Gemini 2.5 Flash · Free</span>
+    </div>
+  </div>
+</div>
+<div class="tab-nav">
+  <button class="tab-btn active" id="tabScout" onclick="
+    document.getElementById('tab-scout').className='tab-panel active';
+    document.getElementById('tab-tracker').className='tab-panel';
+    document.getElementById('tabScout').className='tab-btn active';
+    document.getElementById('tabTracker').className='tab-btn';
+  ">Scout</button>
+  <button class="tab-btn" id="tabTracker" onclick="
+    document.getElementById('tab-scout').className='tab-panel';
+    document.getElementById('tab-tracker').className='tab-panel active';
+    document.getElementById('tabScout').className='tab-btn';
+    document.getElementById('tabTracker').className='tab-btn active';
+    if(typeof renderTracker==='function') renderTracker();
+  ">Tracker <span id="trackerBadge" style="display:none;margin-left:4px;background:var(--amber);color:#000;border-radius:3px;padding:1px 5px;font-size:9px;"></span></button>
+</div>
+
+<div class="key-bar">
+  <label>GEMINI API KEY</label>
+  <input type="password" id="apiKey" placeholder="AIza... — get free key at aistudio.google.com" oninput="updateKeyStatus()" autocomplete="off" spellcheck="false"/>
+  <span class="key-status bad" id="keyStatus">No key</span>
+</div>
+
+<div class="disclaimer">⚠️ For entertainment only. Not financial advice. Always gamble responsibly.</div>
+
+<div id="tab-scout" class="tab-panel active">
+<div class="main">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <div class="sidebar-section">
+      <div class="sec-label">// Today's Slate</div>
+      <div class="scrape-box">
+        <div class="scrape-status" id="scrapeStatus">Not loaded yet — click below to fetch today's matchups from Baseball Savant.</div>
+        <div class="matchup-list" id="matchupList"></div>
+      </div>
+      <button class="btn-scrape" id="scrapeBtn" onclick="scrapeMatchups()" style="margin-top:10px;">
+        ↓ FETCH TODAY'S MATCHUPS
+      </button>
+      <div style="margin-top:8px;text-align:center;font-size:11px;color:var(--dim);font-family:var(--mono);">— or enter manually below —</div>
+      <textarea id="manualInput" class="ctx-input" style="margin-top:6px;min-height:80px;font-size:12px;" placeholder="Cole vs Sale (Fenway Park)&#10;Glasnow vs Darvish (Petco Park)&#10;Elder vs Ramirez (Truist Park)"></textarea>
+      <button class="btn-scrape" onclick="loadManual()" style="margin-top:6px;">
+        ✓ USE MANUAL ENTRY
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sec-label">// Bet Types</div>
+      <div class="bet-chips">
+        <div class="chip on" data-val="strikeouts" onclick="toggleChip(this)">
+          <div class="chip-dot"><div class="chip-dot-inner"></div></div>
+          <div class="chip-text">
+            <div class="chip-name">Strikeouts (K)</div>
+            <div class="chip-hint">K/9, K%, Whiff%, CSW%</div>
+          </div>
+        </div>
+        <div class="chip on" data-val="walks" onclick="toggleChip(this)">
+          <div class="chip-dot"><div class="chip-dot-inner"></div></div>
+          <div class="chip-text">
+            <div class="chip-name">Walks (BB)</div>
+            <div class="chip-hint">BB/9, BB%, zone%, control</div>
+          </div>
+        </div>
+        <div class="chip on" data-val="runs" onclick="toggleChip(this)">
+          <div class="chip-dot"><div class="chip-dot-inner"></div></div>
+          <div class="chip-text">
+            <div class="chip-name">Total Runs</div>
+            <div class="chip-hint">ERA, FIP, xERA, xwOBA</div>
+          </div>
+        </div>
+        <div class="chip on" data-val="moneyline" onclick="toggleChip(this)">
+          <div class="chip-dot"><div class="chip-dot-inner"></div></div>
+          <div class="chip-text">
+            <div class="chip-name">Moneyline</div>
+            <div class="chip-hint">Win prob, bullpen, lineup</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+            <div class="sidebar-section">
+      <div class="sec-label">// Betting Lines (optional)</div>
+      <textarea class="ctx-input" id="ctxInput" style="min-height:90px;" placeholder="Paste moneyline odds here:&#10;&#10;Cardinals -110 / Astros -110&#10;Braves +120 / Twins -142&#10;Mets +105 / Pirates -125"></textarea>
+    </div>
+
+    <div class="sidebar-section" style="display:flex;flex-direction:column;gap:8px;">
+      <button class="btn-analyze" id="analyzeBtn" onclick="runAnalysis()" disabled>
+        ANALYZE ALL MATCHUPS →
+      </button>
+      <button class="btn-export visible" id="exportBtn" onclick="exportTxt()" style="display:none;">
+        ↓ EXPORT REPORT AS .TXT
+      </button>
+    </div>
+
+  </div>
+
+  <!-- Results -->
+  <div class="results">
+    <div class="results-header">
+      <div class="status-row">
+        <span class="status-txt" id="statusTxt">Fetch today's slate to begin.</span>
+        <span class="timer" id="timer">0.0s</span>
+      </div>
+    </div>
+    <div id="output">
+      <div class="empty">
+        <div class="empty-ring">⚾</div>
+        <div class="empty-txt">Fetch today's matchups from Baseball Savant<br>then hit Analyze to get AI-powered picks</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div id="tab-tracker" class="tab-panel">
+  <div class="tracker-wrap">
+
+    <!-- Stats summary row -->
+    <div class="stat-cards" id="trackerStats">
+      <div class="stat-card"><div class="stat-card-val" id="ts-total">0</div><div class="stat-card-label">Total Bets</div></div>
+      <div class="stat-card"><div class="stat-card-val" style="color:var(--green)" id="ts-wins">0</div><div class="stat-card-label">Wins</div></div>
+      <div class="stat-card"><div class="stat-card-val" style="color:var(--red)" id="ts-losses">0</div><div class="stat-card-label">Losses</div></div>
+      <div class="stat-card"><div class="stat-card-val" style="color:var(--muted)" id="ts-pushes">0</div><div class="stat-card-label">Pushes</div></div>
+      <div class="stat-card"><div class="stat-card-val" id="ts-pct">—</div><div class="stat-card-label">Win %</div></div>
+      <div class="stat-card"><div class="stat-card-val" id="ts-units">0</div><div class="stat-card-label">Units P&L</div></div>
+    </div>
+
+    <!-- Performance breakdown -->
+    <div class="perf-grid" id="perfGrid"></div>
+
+    <!-- Bets table -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div class="tracker-section-label">All Tracked Bets</div>
+      <button class="btn-clear" onclick="clearAllBets()">Clear All</button>
+    </div>
+    <div id="trackerTable"></div>
+
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── Tab switching (defined early so onclick handlers work) ──
+function switchTab(tab) {
+  document.getElementById('tab-scout').className = 'tab-panel' + (tab === 'scout' ? ' active' : '');
+  document.getElementById('tab-tracker').className = 'tab-panel' + (tab === 'tracker' ? ' active' : '');
+  document.getElementById('tabScout').className = 'tab-btn' + (tab === 'scout' ? ' active' : '');
+  document.getElementById('tabTracker').className = 'tab-btn' + (tab === 'tracker' ? ' active' : '');
+  if (tab === 'tracker') renderTracker();
+}
+
+// ── State ──
+var matchups = [];
+var lastReport = '';
+var timerInt = null;
+var timerStart = null;
+
+// ── Key ──
+function updateKeyStatus() {
+  var k = document.getElementById('apiKey').value.trim();
+  var el = document.getElementById('keyStatus');
+  if (k.length > 10) {
+    el.textContent = 'Key set'; el.className = 'key-status ok';
+  } else if (k.length > 0) {
+    el.textContent = 'Too short'; el.className = 'key-status bad';
+  } else {
+    el.textContent = 'No key'; el.className = 'key-status bad';
+  }
+}
+
+function getKey() {
+  return document.getElementById('apiKey').value.trim() || null;
+}
+
+// ── Chip toggle ──
+function toggleChip(el) { el.classList.toggle('on'); }
+
+function selectedBets() {
+  return Array.from(document.querySelectorAll('.chip.on')).map(function(c) { return c.dataset.val; });
+}
+
+// ── Timer ──
+function startTimer() {
+  timerStart = Date.now();
+  var el = document.getElementById('timer');
+  el.classList.add('on');
+  timerInt = setInterval(function() {
+    el.textContent = ((Date.now() - timerStart) / 1000).toFixed(1) + 's';
+  }, 100);
+}
+
+function stopTimer() {
+  if (timerInt) { clearInterval(timerInt); timerInt = null; }
+  var el = document.getElementById('timer');
+  el.textContent = 'Done in ' + ((Date.now() - timerStart) / 1000).toFixed(1) + 's';
+}
+
+function setStatus(msg, live) {
+  var el = document.getElementById('statusTxt');
+  el.textContent = msg;
+  el.className = 'status-txt' + (live ? ' live' : '');
+}
+
+// ── Gemini call helper ──
+async function geminiCall(prompt, maxTokens) {
+  var key = getKey();
+  if (!key) throw new Error('No API key set');
+  var res = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + key,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ googleSearch: {} }],
+        generationConfig: { maxOutputTokens: maxTokens || 2048, temperature: 0.1 }
+      })
+    }
+  );
+  if (!res.ok) {
+    var err = await res.json();
+    throw new Error(err.error && err.error.message ? err.error.message : 'Gemini API error');
+  }
+  var data = await res.json();
+  return (data.candidates[0].content.parts || []).filter(function(p) { return p.text; }).map(function(p) { return p.text; }).join('');
+}
+
+function extractJSON(raw) {
+  // Remove backtick fences
+  raw = raw.replace(/```json/gi, '').replace(/```/g, '').replace(/`/g, '').trim();
+
+  // Try parsing all JSON arrays found and return the largest valid one
+  var best = null;
+  var searchFrom = 0;
+  while (true) {
+    var start = raw.indexOf('[', searchFrom);
+    if (start === -1) break;
+
+    // Find matching close bracket
+    var depth = 0, end = -1, inStr = false, esc = false;
+    for (var i = start; i < raw.length; i++) {
+      var ch = raw[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === '[') depth++;
+      else if (ch === ']') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end === -1) break;
+
+    var slice = raw.substring(start, end + 1);
+    try {
+      var p = JSON.parse(slice);
+      if (Array.isArray(p) && p.length > 0) {
+        // Keep the one with the most items (handles duplicates - take first)
+        if (!best || (p.length > best.length)) best = p;
+        if (best) break; // take first valid array and stop
+      }
+    } catch(e) {}
+
+    searchFrom = end + 1;
+  }
+  return best;
+}
+
+// ── Parse text matchups fallback ──
+function parseTextMatchups(text) {
+  var games = [];
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var t = lines[i].trim();
+    if (!t) continue;
+    var atIdx = t.indexOf('@');
+    if (atIdx > 0) {
+      var awayTeam = t.substring(0, atIdx).trim().replace(/^\d+\.\s*/, '');
+      var afterAt = t.substring(atIdx + 1).trim();
+      var dashIdx = afterAt.search(/[—–]/);
+      var homeTeam = dashIdx > 0 ? afterAt.substring(0, dashIdx).trim() : afterAt.split(/[(:]/)[0].trim();
+      var awayPitcher = 'TBD', homePitcher = 'TBD';
+      var vsMatch = t.match(/[—–-]\s*([A-Za-z][A-Za-z .'-]+?)\s+vs\.?\s+([A-Za-z][A-Za-z .'-]+?)(?:\s*\(|\s*\d|$)/i);
+      if (vsMatch) { awayPitcher = vsMatch[1].trim(); homePitcher = vsMatch[2].trim(); }
+      var venueMatch = t.match(/\(([^)]+)\)/);
+      var venue = venueMatch ? venueMatch[1] : '';
+      var timeMatch = t.match(/\d+:\d+\s*(?:AM|PM)\s*ET/i);
+      var gameTime = timeMatch ? timeMatch[0] : '';
+      if (awayTeam.length > 2 && homeTeam.length > 2) {
+        games.push({ awayTeam: awayTeam, homeTeam: homeTeam, awayPitcher: awayPitcher, homePitcher: homePitcher, venue: venue, gameTime: gameTime });
+      }
+    }
+  }
+  return games;
+}
+
+// ── Fetch matchups ──
+// ── Helpers: Deduplication ──
+function smartDedupe(games) {
+  var map = {};
+
+  games.forEach(function(g) {
+    var key = ((g.awayTeam || '') + '|' + (g.homeTeam || '')).toLowerCase();
+
+    // Prefer entries with actual pitchers over TBD
+    if (
+      !map[key] ||
+      (map[key].awayPitcher === 'TBD' && g.awayPitcher !== 'TBD') ||
+      (map[key].homePitcher === 'TBD' && g.homePitcher !== 'TBD')
+    ) {
+      map[key] = g;
+    }
+  });
+
+  return Object.values(map);
+}
+
+// ── Improved JSON extraction ──
+function extractJSON(raw) {
+  raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+  var best = null;
+  var searchFrom = 0;
+
+  while (true) {
+    var start = raw.indexOf('[', searchFrom);
+    if (start === -1) break;
+
+    var depth = 0, end = -1, inStr = false, esc = false;
+
+    for (var i = start; i < raw.length; i++) {
+      var ch = raw[i];
+
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+
+      if (ch === '[') depth++;
+      else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+
+    if (end === -1) break;
+
+    var slice = raw.substring(start, end + 1);
+
+    try {
+      var parsed = JSON.parse(slice);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (!best || parsed.length > best.length) {
+          best = parsed; // pick largest valid array
+        }
+      }
+    } catch (e) {}
+
+    searchFrom = end + 1;
+  }
+
+  return best;
+}
+
+// ── Fetch matchups ──
+async function scrapeMatchups() {
+  var key = getKey();
+  var btn = document.getElementById('scrapeBtn');
+  var statusEl = document.getElementById('scrapeStatus');
+  var listEl = document.getElementById('matchupList');
+
+  if (!key) {
+    statusEl.textContent = 'Please enter your Gemini API key first.';
+    statusEl.className = 'scrape-status error';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>FETCHING...';
+  statusEl.textContent = 'Fetching today\'s slate...';
+  statusEl.className = 'scrape-status';
+  listEl.innerHTML = '';
+
+  var todayShort = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
+
+  // 🔥 STRONGER PROMPT
+  var prompt = `
+Find all MLB games scheduled for TODAY with probable starting pitchers.
+
+Use MLB.com, Rotowire, ESPN if needed.
+
+Return ONLY valid JSON. No text before or after.
+
+Format:
+[
+  {
+    "awayTeam": "Team Name",
+    "homeTeam": "Team Name",
+    "awayPitcher": "Full Name or TBD",
+    "homePitcher": "Full Name or TBD",
+    "venue": "Stadium",
+    "gameTime": "Time ET"
+  }
+]
+
+Rules:
+- Valid JSON only
+- No markdown
+- No explanation
+- At least 5 games
+
+Today: ${todayShort}
+`;
+
+  try {
+    // First attempt
+    var raw = await geminiCall(prompt, 2048);
+    console.log("RAW RESPONSE:", raw);
+
+    var parsed = extractJSON(raw);
+
+    // 🔁 Retry if failed
+    if (!parsed || parsed.length === 0) {
+      console.log("Retrying with strict prompt...");
+
+      var retryPrompt = `
+Return ONLY a JSON array of MLB games today.
+
+No explanation. No markdown.
+
+Example:
+[{"awayTeam":"A","homeTeam":"B","awayPitcher":"X","homePitcher":"Y"}]
+`;
+
+      var retryRaw = await geminiCall(retryPrompt, 1024);
+      console.log("RETRY RESPONSE:", retryRaw);
+
+      parsed = extractJSON(retryRaw);
+    }
+
+    // ❌ Still nothing
+    if (!parsed || parsed.length === 0) {
+      statusEl.innerHTML = `
+        No games found.<br>
+        Check console (F12)<br><br>
+        <code style="font-size:10px;color:#aaa;">
+        ${raw.substring(0, 300)}
+        </code>
+      `;
+      statusEl.className = 'scrape-status error';
+      btn.disabled = false;
+      btn.innerHTML = '↓ FETCH TODAY\'S MATCHUPS';
+      return;
+    }
+
+    // ✅ CLEAN + DEDUPE
+    matchups = smartDedupe(parsed);
+
+    console.log("FINAL MATCHUPS:", matchups);
+
+    // UI render
+    statusEl.className = 'scrape-status loaded';
+    statusEl.innerHTML =
+      '<span style="font-family:var(--mono);font-size:20px;font-weight:600;color:var(--green);">' +
+      matchups.length +
+      '</span> games found';
+
+    listEl.innerHTML = '';
+
+    matchups.forEach(function(m) {
+      var pill = document.createElement('div');
+      pill.className = 'matchup-pill';
+      pill.textContent =
+        m.awayTeam +
+        ' @ ' +
+        m.homeTeam +
+        ' — ' +
+        m.awayPitcher +
+        ' vs ' +
+        m.homePitcher;
+
+      listEl.appendChild(pill);
+    });
+
+    document.getElementById('analyzeBtn').disabled = false;
+    setStatus(matchups.length + ' games loaded. Ready to analyze.');
+
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+    statusEl.className = 'scrape-status error';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '↓ REFRESH MATCHUPS';
+}
+
+// ── Parse "Team ML/Team ML" odds text ──
+function parseOddsText(text) {
+  var games = [];
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var t = lines[i].trim();
+    if (!t) continue;
+    // Match: "Team Name -110/Team Name +120" or "Team Name -110 / Team Name +120"
+    var slashIdx = t.indexOf('/');
+    if (slashIdx === -1) continue;
+    var leftSide = t.substring(0, slashIdx).trim();
+    var rightSide = t.substring(slashIdx + 1).trim();
+    // Split team name from odds — odds start with + or - followed by digits
+    var leftMatch = leftSide.match(/^(.+?)\s+([+-]\d+)\s*$/);
+    var rightMatch = rightSide.match(/^(.+?)\s+([+-]\d+)\s*$/);
+    if (leftMatch && rightMatch) {
+      games.push({
+        awayTeam: leftMatch[1].trim(),
+        awayOdds: leftMatch[2].trim(),
+        homeTeam: rightMatch[1].trim(),
+        homeOdds: rightMatch[2].trim()
+      });
+    }
+  }
+  return games;
+}
+
+
+// ── Run Analysis ──
+async function runAnalysis() {
+  var key = getKey();
+  if (!key) { alert('Please enter your Gemini API key first.'); return; }
+  var bets = selectedBets();
+  if (bets.length === 0) { alert('Select at least one bet type.'); return; }
+  if (matchups.length === 0) { alert('Fetch or enter today\'s matchups first.'); return; }
+
+  var btn = document.getElementById('analyzeBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>ANALYZING...';
+  document.getElementById('exportBtn').style.display = 'none';
+  lastReport = '';
+
+  startTimer();
+  setStatus('Gemini is researching all matchups...', true);
+
+  var ctx = document.getElementById('ctxInput').value.trim();
+
+  var betLabels = { strikeouts: 'Strikeouts (K props)', walks: 'Walks/BB (over/under)', runs: 'Total Runs / game total', moneyline: 'Moneyline (team win/loss)' };
+  var betFocus = bets.map(function(b) { return betLabels[b]; }).join(', ');
+  var doML = bets.indexOf('moneyline') >= 0;
+  var doK  = bets.indexOf('strikeouts') >= 0;
+  var doW  = bets.indexOf('walks') >= 0;
+  var doR  = bets.indexOf('runs') >= 0;
+
+  var recLines = [];
+  if (doK) recLines.push('- **Strikeouts:** OVER or UNDER X.5 Ks - state the number, direction, and why');
+  if (doW) recLines.push('- **Walks:** OVER or UNDER X.5 BBs - state the number, direction, and why');
+  if (doR) recLines.push('- **Total Runs:** OVER or UNDER - state a number and direction');
+  if (doML) recLines.push('- **Moneyline:** Name the SPECIFIC TEAM to WIN. State odds, estimated win%, implied win%, VALUE or NO VALUE. Never refuse to pick.');
+
+  var mlExtra = doML ? '\nMONEYLINE RULES:\n- Search both teams record and last 10 games\n- Search bullpen ERA, WHIP, recent usage\n- Check injuries\n- Negative odds implied%: |odds|/(|odds|+100), positive: 100/(odds+100)\n- Always pick a specific team. Never skip.\n' : '';
+
+  var matchupStr = matchups.map(function(m, i) {
+    var hasTeams = m.awayTeam.indexOf('Game ') !== 0;
+    if (hasTeams) {
+      return 'Game ' + (i+1) + ': ' + m.awayTeam + ' @ ' + m.homeTeam + (m.venue ? ' - ' + m.venue : '') + (m.gameTime ? ' (' + m.gameTime + ')' : '') + '\n  Away Pitcher: ' + m.awayPitcher + '\n  Home Pitcher: ' + m.homePitcher;
+    }
+    return 'Game ' + (i+1) + ': ' + m.awayPitcher + ' vs ' + m.homePitcher + (m.venue ? ' at ' + m.venue : '');
+  }).join('\n\n');
+
+  var systemText = 'You are a sharp MLB betting analyst. Always give specific recommendations - never hedge.\n\nTASK: Research every game and give picks for: ' + betFocus + '\n\nCRITICAL RULES:\n1. Specific recommendation for EVERY bet type for EVERY game.\n2. Never say "I cannot recommend" - always pick a side.\n3. Use web search for current 2026 MLB stats.\n4. SPRING TRAINING: ignore 2026 spring stats - use 2025 regular season stats.\n5. For spring training games, confidence should still reflect your conviction in the pick based on 2025 stats — use 4/5 or 5/5 when data supports a strong pick. Do not artificially lower confidence below 4/5 if the statistical edge is clear.\n' + mlExtra + '\nSTATS TO FIND: ERA, xERA, FIP, WHIP, K/9, BB/9, K%, BB%, CSW%, Whiff%, xwOBA, Hard Hit%, Barrel%, Stuff+\n\nxwOBA RULE: Low xwOBA = pitcher suppressing contact. Compare xwOBA vs ERA - gap signals regression.\n\nFORMAT each game exactly like this:\n\n## [Away Team] @ [Home Team] - [Away Pitcher] vs [Home Pitcher]\n**Away Pitcher Stats:** ERA=X, xERA=X, K%=X%, xwOBA=.XXX, Whiff%=X%\n**Home Pitcher Stats:** ERA=X, xERA=X, K%=X%, xwOBA=.XXX, Whiff%=X%\n**xwOBA Edge:** [which pitcher dominates and why]\n**Matchup Analysis:** [2-3 sentences]\n**Bet Recommendations:**\n' + recLines.join('\n') + '\n**Confidence:** X/5\n\n---\n\n## BEST BET OF THE DAY\n**Game:** [matchup]\n**Pick:** [specific bet and direction]\n**Line:** [odds if known]\n**Reasoning:** [2-3 sentences]\n**Confidence:** X/5';
+
+  var userText = 'TODAY\'S MATCHUPS:\n' + matchupStr + '\n\n' + (ctx ? 'BETTING LINES:\n' + ctx : 'No lines provided - still pick moneyline sides based on analysis.') + '\n\nResearch every pitcher now and give complete picks for: ' + betFocus + '. Do not skip any game or bet type.';
+
+  try {
+    var res = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + key,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemText }] },
+          contents: [{ role: 'user', parts: [{ text: userText }] }],
+          tools: [{ googleSearch: {} }],
+          generationConfig: { maxOutputTokens: 8192, temperature: 0.3 }
+        })
+      }
+    );
+    if (!res.ok) {
+      var err = await res.json();
+      throw new Error(err.error && err.error.message ? err.error.message : 'Gemini API failed');
+    }
+    var data = await res.json();
+    var text = (data.candidates[0].content.parts || []).filter(function(p) { return p.text; }).map(function(p) { return p.text; }).join('\n');
+    if (!text.trim()) throw new Error('No response returned. Please try again.');
+    lastReport = text;
+    stopTimer();
+    setStatus('Analysis complete - ' + matchups.length + ' games - ' + new Date().toLocaleTimeString());
+    var renderedCards = renderCards(text);
+    document.getElementById('exportBtn').style.display = 'block';
+    var added = importPicksFromAnalysis(renderedCards);
+    if (added > 0) {
+      setStatus('Analysis complete - ' + matchups.length + ' games - ' + added + ' picks auto-tracked (4-5 stars) - ' + new Date().toLocaleTimeString());
+    }
+  } catch(err) {
+    stopTimer();
+    setStatus('Error - check key and try again');
+    document.getElementById('output').innerHTML = '<div class="err-box">Error: ' + escH(err.message) + '<br><br>Get a free Gemini key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a></div>';
+  }
+  btn.disabled = false;
+  btn.innerHTML = 'ANALYZE ALL MATCHUPS &rarr;';
+}
+
+// ── Render cards ──
+function confScore(card) {
+  if (card.isBest) return 999;
+  var m = card.conf.match(/(\d)/);
+  return m ? parseInt(m[1]) : 0;
+}
+
+function renderCards(text) {
+  var lines = text.split('\n');
+  var cards = [];
+  var current = null;
+  var inRecs = false;
+
+  function finalizeCard() { if (current) cards.push(current); }
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var trim = line.trim();
+
+    if (line.indexOf('## ') === 0) {
+      finalizeCard();
+      inRecs = false;
+      var isBest = line.indexOf('BEST BET') >= 0;
+      current = { title: trim.replace(/^##\s*/, '').replace(/[*]/g, ''), isBest: isBest, rows: [], recs: [], analysis: '', conf: '' };
+      continue;
+    }
+    if (!current || trim === '---') continue;
+
+    var bm = trim.match(/^\*\*(.+?):\*\*\s*(.*)$/);
+    if (bm) {
+      var label = bm[1].replace(/\*/g, '').trim();
+      var val = bm[2].replace(/\*/g, '').trim();
+      if (/bet rec/i.test(label)) { inRecs = true; continue; }
+      if (/confidence/i.test(label)) { current.conf = val; inRecs = false; continue; }
+      if (/analysis|matchup|edge/i.test(label)) { current.analysis += val + ' '; inRecs = false; continue; }
+      inRecs = false;
+      current.rows.push({ key: label, val: val });
+      continue;
+    }
+
+    if (trim.charAt(0) === '-' || trim.charAt(0) === '*') {
+      var raw = trim.replace(/^[-*]\s*/, '').replace(/\*\*/g, '');
+      var isOv = /\bOVER\b/i.test(raw);
+      var isUn = /\bUNDER\b/i.test(raw);
+      var isML = /moneyline|money line|\bML\b|\bWIN\b|to win/i.test(raw);
+      var cls = isML ? 'ml' : isOv ? 'ov' : isUn ? 'un' : 'gen';
+      var colonIdx = raw.indexOf(':');
+      var typeLabel = isML ? 'MONEYLINE' : isOv ? 'OVER' : isUn ? 'UNDER' : 'REC';
+      var body = raw;
+      if (colonIdx > 0 && colonIdx < 25) { typeLabel = raw.substring(0, colonIdx).trim().toUpperCase(); body = raw.substring(colonIdx + 1).trim(); }
+      if (inRecs || isML || isOv || isUn) { current.recs.push({ cls: cls, typeLabel: typeLabel, body: body }); continue; }
+    }
+
+    if (trim && trim.charAt(0) !== '#') {
+      var clean = trim.replace(/\*\*/g, '');
+      if (current.analysis.length < 600) current.analysis += clean + ' ';
+    }
+  }
+  finalizeCard();
+
+  if (cards.length === 0) {
+    document.getElementById('output').innerHTML = '<div class="err-box">Could not parse response. Please try again.</div>';
+    return;
+  }
+
+  cards.sort(function(a, b) { return confScore(b) - confScore(a); });
+
+  var html = '<div class="cards-wrap">';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:0.08em;"><span style="color:var(--amber);">&#9660;</span> SORTED BY CONFIDENCE &mdash; HIGH TO LOW</div>';
+
+  cards.forEach(function(card) {
+    var score = confScore(card);
+    var rankColor = score >= 4 ? 'var(--green)' : score === 3 ? 'var(--amber)' : 'var(--red)';
+    html += '<div class="game-card' + (card.isBest ? ' best' : '') + '">';
+    html += '<div class="card-head">';
+    html += '<div style="display:flex;align-items:flex-start;gap:10px;flex:1;">';
+    if (!card.isBest && score > 0) {
+      html += '<div style="flex-shrink:0;width:26px;height:26px;border-radius:5px;background:' + rankColor + ';opacity:0.15;display:flex;align-items:center;justify-content:center;position:relative;">';
+      html += '<span style="font-family:var(--mono);font-size:12px;font-weight:600;color:' + rankColor + ';opacity:1;position:absolute;">' + score + '</span></div>';
+    }
+    html += '<div class="card-title">' + escH(card.title) + '</div>';
+    html += '</div>';
+    if (card.isBest) {
+      html += '<div class="best-badge">&#9733; BEST BET</div>';
+    } else if (score > 0) {
+      html += '<div style="font-family:var(--mono);font-size:11px;color:' + rankColor + ';white-space:nowrap;flex-shrink:0;">' + '&#9733;'.repeat(score) + '&#9734;'.repeat(5 - score) + '</div>';
+    }
+    html += '</div>';
+    html += '<div class="card-body">';
+
+    if (card.rows.length > 0) {
+      html += '<div class="stat-grid">';
+      card.rows.forEach(function(r) {
+        var isFull = r.val.length > 60;
+        html += '<div class="stat-row2' + (isFull ? ' full-row' : '') + '">';
+        html += '<div class="stat-key">' + escH(r.key) + '</div>';
+        html += '<div class="stat-val">' + escH(r.val) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    if (card.analysis.trim()) {
+      html += '<div class="analysis-block">' + escH(card.analysis.trim()) + '</div>';
+    }
+
+    if (card.recs.length > 0) {
+      html += '<div class="recs-label">Bet Recommendations</div>';
+      html += '<div class="recs-list">';
+      card.recs.forEach(function(r) {
+        html += '<div class="rec ' + r.cls + '">';
+        html += '<div class="rec-type">' + escH(r.typeLabel) + '</div>';
+        html += '<div class="rec-body">' + escH(r.body) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    if (card.conf) {
+      var stars = card.conf.match(/(\d)/);
+      var sc = stars ? parseInt(stars[1]) : 0;
+      var rc = sc >= 4 ? 'var(--green)' : sc === 3 ? 'var(--amber)' : 'var(--red)';
+      html += '<div class="conf-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">';
+      html += '<span style="color:var(--dim);">Confidence</span>';
+      html += '<span style="color:' + rc + ';">' + '&#9733;'.repeat(sc) + '&#9734;'.repeat(5 - sc) + '</span>';
+      html += '<span style="color:var(--muted);font-family:var(--mono);font-size:11px;">' + escH(card.conf) + '</span>';
+      html += '</div>';
+    }
+
+    html += '</div></div>';
+  });
+
+  html += '</div>';
+  document.getElementById('output').innerHTML = html;
+  return cards;
+}
+
+// ── Export TXT ──
+function exportTxt() {
+  if (!lastReport) { alert('No report to export yet.'); return; }
+  var date = new Date().toISOString().split('T')[0];
+  var header = '================================================================\n  PITCHER BET SCOUT - DAILY REPORT\n  Generated: ' + new Date().toLocaleString() + '\n  Games analyzed: ' + matchups.length + '\n================================================================\n\n';
+  var matchupSummary = matchups.map(function(m, i) {
+    return '  Game ' + (i+1) + ': ' + m.awayTeam + ' @ ' + m.homeTeam + ' - ' + m.awayPitcher + ' vs ' + m.homePitcher + (m.venue ? ' (' + m.venue + ')' : '');
+  }).join('\n');
+  var ctx = document.getElementById('ctxInput').value.trim();
+  var ctxBlock = ctx ? '\nBETTING LINES:\n' + ctx + '\n' : '';
+  var full = header + "TODAY'S SLATE:\n" + matchupSummary + '\n' + ctxBlock + '\n================================================================\n\n' + lastReport + '\n\n================================================================\n  END OF REPORT\n================================================================';
+  var blob = new Blob([full], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'pitcher-bet-scout-' + date + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escH(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Tracker storage ──
+function loadBets() {
+  try { return JSON.parse(localStorage.getItem('pbs_bets') || '[]'); } catch(e) { return []; }
+}
+function saveBets(bets) {
+  localStorage.setItem('pbs_bets', JSON.stringify(bets));
+}
+
+// ── Auto-import picks from analysis (conf 4+) ──
+function importPicksFromAnalysis(cards) {
+  var bets = loadBets();
+  var today = new Date().toISOString().split('T')[0];
+  var added = 0;
+
+  cards.forEach(function(card) {
+    if (card.isBest) return; // skip the "best bet" summary card, individual picks already captured
+    var score = confScore(card);
+    if (score < 4) return; // only 4 and 5 star picks
+
+    card.recs.forEach(function(rec) {
+      // Check for duplicate (same date + game + type + body)
+      var isDup = bets.some(function(b) {
+        return b.date === today && b.game === card.title && b.type === rec.typeLabel && b.pick === rec.body;
+      });
+      if (isDup) return;
+
+      bets.push({
+        id: Date.now() + Math.random(),
+        date: today,
+        game: card.title,
+        type: rec.typeLabel,
+        pick: rec.body,
+        conf: score,
+        result: 'P', // pending
+        units: 1
+      });
+      added++;
+    });
+  });
+
+  saveBets(bets);
+  updateTrackerBadge();
+  return added;
+}
+
+function updateTrackerBadge() {
+  var bets = loadBets();
+  var pending = bets.filter(function(b) { return b.result === 'P'; }).length;
+  var badge = document.getElementById('trackerBadge');
+  if (pending > 0) {
+    badge.textContent = pending + ' pending';
+    badge.style.display = 'inline';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ── Set result ──
+function setResult(id, result) {
+  var bets = loadBets();
+  bets = bets.map(function(b) {
+    if (b.id === id) b.result = result;
+    return b;
+  });
+  saveBets(bets);
+  renderTracker();
+  updateTrackerBadge();
+}
+
+function deleteBet(id) {
+  var bets = loadBets().filter(function(b) { return b.id !== id; });
+  saveBets(bets);
+  renderTracker();
+  updateTrackerBadge();
+}
+
+function clearAllBets() {
+  if (confirm('Clear all tracked bets? This cannot be undone.')) {
+    localStorage.removeItem('pbs_bets');
+    renderTracker();
+    updateTrackerBadge();
+  }
+}
+
+// ── Render tracker ──
+function renderTracker() {
+  var bets = loadBets();
+
+  if (bets.length === 0) {
+    document.getElementById('trackerTable').innerHTML = '<div class="empty-tracker">No bets tracked yet.<br>Run an analysis — all 4★ and 5★ picks are auto-imported here.<br>Then mark results as W / L / P when games finish.</div>';
+    document.getElementById('perfGrid').innerHTML = '';
+    updateSummaryStats(bets);
+    return;
+  }
+
+  // Sort: pending first, then by date desc
+  bets.sort(function(a, b) {
+    if (a.result === 'P' && b.result !== 'P') return -1;
+    if (a.result !== 'P' && b.result === 'P') return 1;
+    return b.date.localeCompare(a.date);
+  });
+
+  updateSummaryStats(bets);
+  renderPerfGrid(bets);
+
+  // Table
+  var html = '<table class="bets-table"><thead><tr><th>Date</th><th>Game</th><th>Type</th><th>Pick</th><th>Conf</th><th>Result</th><th></th></tr></thead><tbody>';
+  bets.forEach(function(b) {
+    var isPending = b.result === 'P';
+    var rowStyle = isPending ? '' : (b.result === 'W' ? 'opacity:0.75;' : b.result === 'L' ? 'opacity:0.6;' : 'opacity:0.5;');
+    html += '<tr style="' + rowStyle + '">';
+    html += '<td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;">' + escH(b.date) + '</td>';
+    html += '<td style="font-size:12px;max-width:200px;">' + escH(b.game) + '</td>';
+    html += '<td><span class="type-badge">' + escH(b.type) + '</span></td>';
+    html += '<td style="max-width:220px;font-size:12px;">' + (b.result === 'P' ? '<span class="pending-dot"></span>' : '') + escH(b.pick) + '</td>';
+    html += '<td><span class="conf-badge c' + b.conf + '">' + b.conf + '/5</span></td>';
+    html += '<td><div style="display:flex;gap:4px;">';
+    ['W','L','P'].forEach(function(r) {
+      var isActive = b.result === r && !isPending || (b.result === r);
+      var cls = 'result-btn ' + r + (b.result === r ? ' active-' + r : '');
+      var label = r === 'P' && isPending ? 'Pending' : r === 'P' ? 'Push' : r;
+      html += '<button class="' + cls + '" onclick="setResult(' + b.id + ',' + '\'' + r + '\''+ ')">' + label + '</button>';
+    });
+    html += '</div></td>';
+    html += '<td><button onclick="deleteBet(' + b.id + ')" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:2px 4px;" title="Remove">&#x2715;</button></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('trackerTable').innerHTML = html;
+}
+
+function updateSummaryStats(bets) {
+  var settled = bets.filter(function(b) { return b.result !== 'P'; });
+  var wins = settled.filter(function(b) { return b.result === 'W'; }).length;
+  var losses = settled.filter(function(b) { return b.result === 'L'; }).length;
+  var pushes = settled.filter(function(b) { return b.result === 'P' && false; }).length; // pushes counted separately
+  var actualPushes = bets.filter(function(b) { return b.result === 'P' && b.result === 'P'; });
+  // re-count properly
+  var w = bets.filter(function(b) { return b.result === 'W'; }).length;
+  var l = bets.filter(function(b) { return b.result === 'L'; }).length;
+  var p = bets.filter(function(b) { return b.result === 'P' && bets.indexOf(b) >= 0; });
+  // simplify
+  var allW = 0, allL = 0, allPush = 0, allPend = 0;
+  bets.forEach(function(b) {
+    if (b.result === 'W') allW++;
+    else if (b.result === 'L') allL++;
+    else if (b.result === 'X') allPush++; // push stored as X
+    else allPend++; // pending stored as P
+  });
+  // Actually: W=win, L=loss, X=push, P=pending
+  // We used P for pending and P for push — fix: use result===push as X
+  // Recalculate cleanly
+  var wins2 = bets.filter(function(b){return b.result==='W';}).length;
+  var losses2 = bets.filter(function(b){return b.result==='L';}).length;
+  var pushes2 = bets.filter(function(b){return b.result==='X';}).length;
+  var pending2 = bets.filter(function(b){return b.result==='P';}).length;
+  var settled2 = wins2 + losses2;
+  var pct = settled2 > 0 ? Math.round((wins2/settled2)*100) + '%' : '—';
+  var units = (wins2 - losses2).toFixed(1);
+  document.getElementById('ts-total').textContent = bets.length;
+  document.getElementById('ts-wins').textContent = wins2;
+  document.getElementById('ts-losses').textContent = losses2;
+  document.getElementById('ts-pushes').textContent = pushes2 + ' (' + pending2 + ' pending)';
+  document.getElementById('ts-pct').textContent = pct;
+  var unitsEl = document.getElementById('ts-units');
+  unitsEl.textContent = (parseFloat(units) >= 0 ? '+' : '') + units;
+  unitsEl.style.color = parseFloat(units) >= 0 ? 'var(--green)' : 'var(--red)';
+}
+
+function renderPerfGrid(bets) {
+  // By bet type
+  var types = {};
+  // By confidence
+  var confs = {};
+  bets.forEach(function(b) {
+    if (b.result === 'P') return; // skip pending
+    if (!types[b.type]) types[b.type] = {w:0,l:0};
+    if (b.result === 'W') types[b.type].w++;
+    else if (b.result === 'L') types[b.type].l++;
+    if (!confs[b.conf]) confs[b.conf] = {w:0,l:0};
+    if (b.result === 'W') confs[b.conf].w++;
+    else if (b.result === 'L') confs[b.conf].l++;
+  });
+
+  var html = '';
+
+  // By type card
+  var typeKeys = Object.keys(types);
+  if (typeKeys.length > 0) {
+    html += '<div class="perf-card"><div class="perf-card-title">By Bet Type</div>';
+    typeKeys.forEach(function(t) {
+      var d = types[t];
+      var tot = d.w + d.l;
+      var pct = tot > 0 ? Math.round((d.w/tot)*100) + '%' : '—';
+      var color = tot === 0 ? 'var(--muted)' : d.w/tot >= 0.55 ? 'var(--green)' : d.w/tot >= 0.45 ? 'var(--amber)' : 'var(--red)';
+      html += '<div class="perf-row"><span class="perf-row-label">' + escH(t) + '</span><span class="perf-row-val" style="color:' + color + ';">' + d.w + '-' + d.l + ' (' + pct + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // By confidence card
+  var confKeys = Object.keys(confs).sort(function(a,b){return b-a;});
+  if (confKeys.length > 0) {
+    html += '<div class="perf-card"><div class="perf-card-title">By Confidence</div>';
+    confKeys.forEach(function(c) {
+      var d = confs[c];
+      var tot = d.w + d.l;
+      var pct = tot > 0 ? Math.round((d.w/tot)*100) + '%' : '—';
+      var color = tot === 0 ? 'var(--muted)' : d.w/tot >= 0.55 ? 'var(--green)' : d.w/tot >= 0.45 ? 'var(--amber)' : 'var(--red)';
+      var stars = '';
+      for (var i=0;i<parseInt(c);i++) stars += '★';
+      for (var j=parseInt(c);j<5;j++) stars += '☆';
+      html += '<div class="perf-row"><span class="perf-row-label" style="color:var(--amber);font-family:var(--mono);font-size:11px;">' + stars + '</span><span class="perf-row-val" style="color:' + color + ';">' + d.w + '-' + d.l + ' (' + pct + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  // By date (last 7 days) card
+  var dateBets = {};
+  bets.forEach(function(b) {
+    if (b.result === 'P') return;
+    if (!dateBets[b.date]) dateBets[b.date] = {w:0,l:0};
+    if (b.result === 'W') dateBets[b.date].w++;
+    else if (b.result === 'L') dateBets[b.date].l++;
+  });
+  var dateKeys = Object.keys(dateBets).sort().reverse().slice(0,7);
+  if (dateKeys.length > 0) {
+    html += '<div class="perf-card"><div class="perf-card-title">By Date (Recent)</div>';
+    dateKeys.forEach(function(d) {
+      var dd = dateBets[d];
+      var tot = dd.w + dd.l;
+      var pct = tot > 0 ? Math.round((dd.w/tot)*100) + '%' : '—';
+      var color = tot === 0 ? 'var(--muted)' : dd.w/tot >= 0.55 ? 'var(--green)' : dd.w/tot >= 0.45 ? 'var(--amber)' : 'var(--red)';
+      html += '<div class="perf-row"><span class="perf-row-label">' + escH(d) + '</span><span class="perf-row-val" style="color:' + color + ';">' + dd.w + '-' + dd.l + ' (' + pct + ')</span></div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('perfGrid').innerHTML = html || '';
+}
+
+// Init tracker badge on load
+updateTrackerBadge();
+</script>
+</body>
+</html>
