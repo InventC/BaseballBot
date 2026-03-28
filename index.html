@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pitcher Bet Scout v3</title>
+<title>Pitcher Bet Scout v5</title>
 <style>
 /* system fonts — no external dependency */
 
@@ -338,7 +338,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="logo">⚾</div>
     <div>
       <span class="app-name">Pitcher Bet Scout</span>
-      <span class="app-sub">// v2 · Gemini 2.5 Flash · Free</span>
+      <span class="app-sub">// v5 · Gemini 2.5 Flash · Free</span>
     </div>
   </div>
 </div>
@@ -571,45 +571,6 @@ async function geminiCall(prompt, maxTokens) {
   return (data.candidates[0].content.parts || []).filter(function(p) { return p.text; }).map(function(p) { return p.text; }).join('');
 }
 
-function extractJSON(raw) {
-  // Remove backtick fences
-  raw = raw.replace(/```json/gi, '').replace(/```/g, '').replace(/`/g, '').trim();
-
-  // Try parsing all JSON arrays found and return the largest valid one
-  var best = null;
-  var searchFrom = 0;
-  while (true) {
-    var start = raw.indexOf('[', searchFrom);
-    if (start === -1) break;
-
-    // Find matching close bracket
-    var depth = 0, end = -1, inStr = false, esc = false;
-    for (var i = start; i < raw.length; i++) {
-      var ch = raw[i];
-      if (esc) { esc = false; continue; }
-      if (ch === '\\') { esc = true; continue; }
-      if (ch === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (ch === '[') depth++;
-      else if (ch === ']') { depth--; if (depth === 0) { end = i; break; } }
-    }
-    if (end === -1) break;
-
-    var slice = raw.substring(start, end + 1);
-    try {
-      var p = JSON.parse(slice);
-      if (Array.isArray(p) && p.length > 0) {
-        // Keep the one with the most items (handles duplicates - take first)
-        if (!best || (p.length > best.length)) best = p;
-        if (best) break; // take first valid array and stop
-      }
-    } catch(e) {}
-
-    searchFrom = end + 1;
-  }
-  return best;
-}
-
 // ── Parse text matchups fallback ──
 function parseTextMatchups(text) {
   var games = [];
@@ -661,7 +622,13 @@ function smartDedupe(games) {
 
 // ── Improved JSON extraction ──
 function extractJSON(raw) {
-  raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+  // Strip markdown fences and backticks
+  raw = raw.replace(/```json/gi, '').replace(/```/g, '').replace(/`/g, '').trim();
+
+  // Un-escape if Gemini wrapped the array in a JSON string
+  if (raw.charAt(0) === '"') {
+    try { raw = JSON.parse(raw); } catch(e) {}
+  }
 
   var best = null;
   var searchFrom = 0;
@@ -674,19 +641,14 @@ function extractJSON(raw) {
 
     for (var i = start; i < raw.length; i++) {
       var ch = raw[i];
-
       if (esc) { esc = false; continue; }
       if (ch === '\\') { esc = true; continue; }
       if (ch === '"') { inStr = !inStr; continue; }
       if (inStr) continue;
-
       if (ch === '[') depth++;
       else if (ch === ']') {
         depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
+        if (depth === 0) { end = i; break; }
       }
     }
 
@@ -697,8 +659,23 @@ function extractJSON(raw) {
     try {
       var parsed = JSON.parse(slice);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        if (!best || parsed.length > best.length) {
-          best = parsed; // pick largest valid array
+        // Normalize: coerce null/undefined pitchers and teams to strings
+        parsed = parsed.map(function(g) {
+          return {
+            awayTeam:    (g.awayTeam    && g.awayTeam    !== 'null') ? String(g.awayTeam)    : 'TBD',
+            homeTeam:    (g.homeTeam    && g.homeTeam    !== 'null') ? String(g.homeTeam)    : 'TBD',
+            awayPitcher: (g.awayPitcher && g.awayPitcher !== 'null') ? String(g.awayPitcher) : 'TBD',
+            homePitcher: (g.homePitcher && g.homePitcher !== 'null') ? String(g.homePitcher) : 'TBD',
+            venue:       g.venue    ? String(g.venue)    : '',
+            gameTime:    g.gameTime ? String(g.gameTime) : ''
+          };
+        }).filter(function(g) {
+          // Drop rows where both teams are missing
+          return !(g.awayTeam === 'TBD' && g.homeTeam === 'TBD');
+        });
+
+        if (parsed.length > 0 && (!best || parsed.length > best.length)) {
+          best = parsed;
         }
       }
     } catch (e) {}
@@ -770,23 +747,26 @@ Today: ${todayShort}
 
     var parsed = extractJSON(raw);
 
-    // 🔁 Retry if failed
-    if (!parsed || parsed.length === 0) {
+    // 🔁 Retry if failed or all pitchers came back null
+    var allNullPitchers = parsed && parsed.length > 0 && parsed.every(function(g) { return g.awayPitcher === 'TBD' && g.homePitcher === 'TBD'; });
+    if (!parsed || parsed.length === 0 || allNullPitchers) {
       console.log("Retrying with strict prompt...");
 
-      var retryPrompt = `
-Return ONLY a JSON array of MLB games today.
+      var retryPrompt = `Today is ${todayShort}.
 
-No explanation. No markdown.
+List every MLB game scheduled today with the probable starting pitcher for each team.
 
-Example:
-[{"awayTeam":"A","homeTeam":"B","awayPitcher":"X","homePitcher":"Y"}]
-`;
+Return ONLY a valid JSON array. No markdown. No explanation. No text before or after the array.
+
+Use pitcher last names if full names unavailable. Use "TBD" only if genuinely unknown.
+
+[{"awayTeam":"Full Team Name","homeTeam":"Full Team Name","awayPitcher":"First Last","homePitcher":"First Last","venue":"Stadium Name","gameTime":"H:MM PM ET"}]`;
 
       var retryRaw = await geminiCall(retryPrompt, 1024);
       console.log("RETRY RESPONSE:", retryRaw);
 
-      parsed = extractJSON(retryRaw);
+      var retryParsed = extractJSON(retryRaw);
+      if (retryParsed && retryParsed.length > 0) parsed = retryParsed;
     }
 
     // ❌ Still nothing
