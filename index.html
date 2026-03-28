@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pitcher Bet Scout v5</title>
+<title>Pitcher Bet Scout v6</title>
 <style>
 /* system fonts — no external dependency */
 
@@ -338,7 +338,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="logo">⚾</div>
     <div>
       <span class="app-name">Pitcher Bet Scout</span>
-      <span class="app-sub">// v5 · Gemini 2.5 Flash · Free</span>
+      <span class="app-sub">// v6 · Gemini 2.5 Flash · Free</span>
     </div>
   </div>
 </div>
@@ -571,6 +571,29 @@ async function geminiCall(prompt, maxTokens) {
   return (data.candidates[0].content.parts || []).filter(function(p) { return p.text; }).map(function(p) { return p.text; }).join('');
 }
 
+// ── Gemini call WITHOUT grounding (for JSON conversion — avoids citation brackets) ──
+async function geminiCallNoSearch(prompt, maxTokens) {
+  var key = getKey();
+  if (!key) throw new Error('No API key set');
+  var res = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + key,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: maxTokens || 2048, temperature: 0.0 }
+      })
+    }
+  );
+  if (!res.ok) {
+    var err = await res.json();
+    throw new Error(err.error && err.error.message ? err.error.message : 'Gemini API error');
+  }
+  var data = await res.json();
+  return (data.candidates[0].content.parts || []).filter(function(p) { return p.text; }).map(function(p) { return p.text; }).join('');
+}
+
 // ── Parse text matchups fallback ──
 function parseTextMatchups(text) {
   var games = [];
@@ -686,7 +709,7 @@ function extractJSON(raw) {
   return best;
 }
 
-// ── Fetch matchups ──
+// ── Fetch matchups — 2-step pipeline to avoid citation-bracket JSON corruption ──
 async function scrapeMatchups() {
   var key = getKey();
   var btn = document.getElementById('scrapeBtn');
@@ -701,115 +724,69 @@ async function scrapeMatchups() {
 
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>FETCHING...';
-  statusEl.textContent = 'Fetching today\'s slate...';
   statusEl.className = 'scrape-status';
   listEl.innerHTML = '';
 
   var todayShort = new Date().toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
+    month: 'long', day: 'numeric', year: 'numeric'
   });
 
-  // 🔥 STRONGER PROMPT
-  var prompt = `
-Find all MLB games scheduled for TODAY with probable starting pitchers.
-
-Use MLB.com, Rotowire, ESPN if needed.
-
-Return ONLY valid JSON. No text before or after.
-
-Format:
-[
-  {
-    "awayTeam": "Team Name",
-    "homeTeam": "Team Name",
-    "awayPitcher": "Full Name or TBD",
-    "homePitcher": "Full Name or TBD",
-    "venue": "Stadium",
-    "gameTime": "Time ET"
-  }
-]
-
-Rules:
-- Valid JSON only
-- No markdown
-- No explanation
-- At least 5 games
-
-Today: ${todayShort}
-`;
-
   try {
-    // First attempt
-    var raw = await geminiCall(prompt, 2048);
-    console.log("RAW RESPONSE:", raw);
+    // ── STEP 1: grounded search → plain text (no JSON, so no citation corruption) ──
+    statusEl.textContent = 'Step 1/2 — searching for today\'s slate...';
+    var searchPrompt = 'Today is ' + todayShort + '. List every MLB game scheduled today. ' +
+      'For each game write one line like: AWAY TEAM @ HOME TEAM — Away Pitcher vs Home Pitcher (Venue, Time ET). ' +
+      'Use "TBD" if a pitcher is not announced. Plain text only — no JSON, no markdown.';
 
-    var parsed = extractJSON(raw);
+    var rawText = await geminiCall(searchPrompt, 1500);
+    console.log("STEP 1 RAW TEXT:", rawText);
 
-    // 🔁 Retry if failed or all pitchers came back null
-    var allNullPitchers = parsed && parsed.length > 0 && parsed.every(function(g) { return g.awayPitcher === 'TBD' && g.homePitcher === 'TBD'; });
-    if (!parsed || parsed.length === 0 || allNullPitchers) {
-      console.log("Retrying with strict prompt...");
+    // ── STEP 2: no-search call → convert plain text to clean JSON ──
+    statusEl.textContent = 'Step 2/2 — converting to structured data...';
+    var convertPrompt = 'Convert the following MLB schedule text into a JSON array. ' +
+      'Return ONLY the JSON array, no markdown, no explanation, no text before or after. ' +
+      'Fields: awayTeam, homeTeam, awayPitcher, homePitcher, venue, gameTime. ' +
+      'Use "TBD" for missing pitchers. Use full team names (e.g. "Tampa Bay Rays" not "Rays").
 
-      var retryPrompt = `Today is ${todayShort}.
+' +
+      'TEXT TO CONVERT:
+' + rawText;
 
-List every MLB game scheduled today with the probable starting pitcher for each team.
+    var jsonRaw = await geminiCallNoSearch(convertPrompt, 2048);
+    console.log("STEP 2 JSON RAW:", jsonRaw);
 
-Return ONLY a valid JSON array. No markdown. No explanation. No text before or after the array.
+    var parsed = extractJSON(jsonRaw);
 
-Use pitcher last names if full names unavailable. Use "TBD" only if genuinely unknown.
-
-[{"awayTeam":"Full Team Name","homeTeam":"Full Team Name","awayPitcher":"First Last","homePitcher":"First Last","venue":"Stadium Name","gameTime":"H:MM PM ET"}]`;
-
-      var retryRaw = await geminiCall(retryPrompt, 1024);
-      console.log("RETRY RESPONSE:", retryRaw);
-
-      var retryParsed = extractJSON(retryRaw);
-      if (retryParsed && retryParsed.length > 0) parsed = retryParsed;
+    // ── Fallback: try parsing the Step 1 text directly if Step 2 failed ──
+    if (!parsed || parsed.length === 0) {
+      console.log("Step 2 parse failed, trying Step 1 text directly...");
+      parsed = extractJSON(rawText);
     }
 
-    // ❌ Still nothing
+    // ── Still nothing ──
     if (!parsed || parsed.length === 0) {
-      statusEl.innerHTML = `
-        No games found.<br>
-        Check console (F12)<br><br>
-        <code style="font-size:10px;color:#aaa;">
-        ${raw.substring(0, 300)}
-        </code>
-      `;
+      statusEl.innerHTML = 'No games found. Check console (F12)<br>' +
+        '<code style="font-size:10px;color:#aaa;">' + rawText.substring(0, 300) + '</code>';
       statusEl.className = 'scrape-status error';
       btn.disabled = false;
       btn.innerHTML = '↓ FETCH TODAY\'S MATCHUPS';
       return;
     }
 
-    // ✅ CLEAN + DEDUPE
+    // ── CLEAN + DEDUPE ──
     matchups = smartDedupe(parsed);
-
     console.log("FINAL MATCHUPS:", matchups);
 
-    // UI render
     statusEl.className = 'scrape-status loaded';
     statusEl.innerHTML =
       '<span style="font-family:var(--mono);font-size:20px;font-weight:600;color:var(--green);">' +
-      matchups.length +
-      '</span> games found';
+      matchups.length + '</span> games found';
 
     listEl.innerHTML = '';
-
     matchups.forEach(function(m) {
       var pill = document.createElement('div');
       pill.className = 'matchup-pill';
-      pill.textContent =
-        m.awayTeam +
-        ' @ ' +
-        m.homeTeam +
-        ' — ' +
-        m.awayPitcher +
-        ' vs ' +
-        m.homePitcher;
-
+      pill.textContent = m.awayTeam + ' @ ' + m.homeTeam + ' — ' + m.awayPitcher + ' vs ' + m.homePitcher;
       listEl.appendChild(pill);
     });
 
