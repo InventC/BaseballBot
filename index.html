@@ -364,7 +364,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   <span class="key-status bad" id="keyStatus">No key</span>
 </div>
 
-<div class="disclaimer">⚠️ For entertainment only. Not financial advice. Don't yell at me if you make the wrong picks. Always gamble responsibly.</div>
+<div class="disclaimer">⚠️ For entertainment only. Not financial advice. Don't yell at me if you pick wrong. Always gamble responsibly.</div>
 
 <div id="tab-scout" class="tab-panel active">
 <div class="main">
@@ -375,7 +375,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="sidebar-section">
       <div class="sec-label">// Today's Slate</div>
       <div class="scrape-box">
-        <div class="scrape-status" id="scrapeStatus">Not loaded yet — click below to fetch today's matchups from MLB API.</div>
+        <div class="scrape-status" id="scrapeStatus">Not loaded yet — click below to fetch today's pitching matchups from MLB API.</div>
         <div class="matchup-list" id="matchupList"></div>
       </div>
       <button class="btn-scrape" id="scrapeBtn" onclick="scrapeMatchups()" style="margin-top:10px;">
@@ -912,35 +912,30 @@ async function runAnalysis() {
       '3. Never say "I cannot recommend" — always pick a side.\n' +
       '4. SPRING TRAINING: ignore 2026 spring stats — use 2025 regular season data provided.\n' +
       '5. Do NOT make up stats — if data is missing, say so and use search.\n\n' +
-      'OUTPUT RULES (critical — token budget is limited):\n' +
-      '- FULL CARD only for picks with Confidence 4/5 or 5/5.\n' +
-      '- For picks with Confidence 3/5 or below: add them to a compact LOW-CONFIDENCE TABLE at the very end.\n' +
-      '- Be concise. One sentence per reason. No padding.\n\n' +
-      'FORMAT FOR HIGH-CONFIDENCE GAMES (4/5 or 5/5 picks):\n\n' +
+      'TOKEN BUDGET IS LIMITED — follow these rules strictly:\n' +
+      '- Output EVERY game and EVERY pick. Do not skip any.\n' +
+      '- Be concise: one sentence per reason, no padding, no repetition.\n' +
+      '- Stat lines: keep to one line per pitcher.\n' +
+      '- Analysis: 1 sentence max.\n\n' +
+      'FORMAT EACH GAME EXACTLY LIKE THIS:\n\n' +
       '## [Away Team] @ [Home Team] — [Away Pitcher] vs [Home Pitcher]\n' +
       '**Away Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
       '**Home Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
       '**Park:** [park factor note]\n' +
-      '**Analysis:** [1-2 sentences max]\n' +
+      '**Analysis:** [1 sentence]\n' +
       '**Picks:**\n' +
       recLines.join('\n') + '\n\n' +
-      'FORMAT FOR EACH PICK LINE:\n' +
-      '- [BET TYPE]: [DIRECTION + LINE] | Confidence: X/5 | [one sentence reason]\n\n' +
-      'Example pick lines:\n' +
-      '- Strikeouts: OVER 6.5 Ks | Confidence: 4/5 | Cole K%=29%, opp K%=26%, last 3: 7,8,6 Ks\n' +
-      '- Walks: UNDER 2.5 BBs | Confidence: 3/5 | BB/9=2.1, last 4: 1,2,1,2 BBs\n' +
-      '- Total Runs: UNDER 8.5 | Confidence: 3/5 | Elite ERAs, PF=95, wind in\n' +
-      '- Moneyline: Yankees -145 | Confidence: 4/5 | 8-2 last 10, top-5 bullpen ERA\n\n' +
-      'LOW-CONFIDENCE TABLE FORMAT (for all 3/5 and below picks — put at the end):\n\n' +
-      '## LOW CONFIDENCE PICKS\n' +
-      '| Game | Bet | Pick | Conf | Reason |\n' +
-      '|------|-----|------|------|--------|\n' +
-      '| Cubs @ Mets | Moneyline | Mets -110 | 3/5 | home field, better bullpen |\n' +
-      '| Cubs @ Mets | Total Runs | UNDER 8.5 | 2/5 | elite starters, low PF |\n\n' +
+      'PICK LINE FORMAT (use exactly):\n' +
+      '- [BET TYPE]: [DIRECTION + LINE] | Confidence: X/5 | [reason]\n\n' +
+      'Examples:\n' +
+      '- Strikeouts: OVER 6.5 Ks | Confidence: 4/5 | K%=29%, opp K%=26%, last 3: 7,8,6\n' +
+      '- Walks: UNDER 2.5 BBs | Confidence: 3/5 | BB/9=2.1, last 4: 1,2,1,2\n' +
+      '- Total Runs: UNDER 8.5 | Confidence: 3/5 | elite ERAs, PF=95, wind in\n' +
+      '- Moneyline: Yankees -145 | Confidence: 4/5 | 8-2 last 10, top-5 bullpen\n\n' +
       '---\n\n' +
       '## BEST BET OF THE DAY\n' +
       '**Pick:** [full pick]\n' +
-      '**Reasoning:** [2-3 sentences]\n' +
+      '**Reasoning:** [2 sentences]\n' +
       '**Confidence:** 5/5\n\n' +
       '---\n\n' +
       'TODAY\'S PITCHER DATA (from MLB Stats API):\n\n' +
@@ -995,7 +990,7 @@ function renderCards(text) {
     // New card on ## heading
     if(line.indexOf('## ')===0){
       finalizeCard(); inPicks=false;
-      var isBest=line.indexOf('BEST BET')>=0||line.indexOf('LOW CONFIDENCE')>=0;
+      var isBest=line.indexOf('BEST BET')>=0;
       current={title:trim.replace(/^##\s*/,'').replace(/[*]/g,''),isBest:isBest,rows:[],recs:[],analysis:'',conf:''};
       continue;
     }
@@ -1012,7 +1007,7 @@ function renderCards(text) {
     }
 
     // Pick lines: - BET TYPE: DIRECTION | Confidence: X/5 | reason
-    if((trim.charAt(0)==='-'||trim.charAt(0)==='*')&&(inPicks||trim.indexOf('|')>-1)){
+    if((trim.charAt(0)==='-'||trim.charAt(0)==='*')&&inPicks){
       var raw=trim.replace(/^[-*]\s*/,'').replace(/\*\*/g,'');
 
       // Parse inline confidence: "| Confidence: X/5 |"
@@ -1037,20 +1032,6 @@ function renderCards(text) {
       continue;
     }
 
-    // Markdown table rows in LOW CONFIDENCE section → parse as picks
-    if(current&&current.isBest&&trim.charAt(0)==='|'&&trim.indexOf('---')===-1&&trim.indexOf('Game')===-1){
-      var cells=trim.split('|').map(function(c){return c.trim();}).filter(function(c){return c;});
-      if(cells.length>=4){
-        var tgame=cells[0],ttype=cells[1],tpick=cells[2],tconf=cells[3]||'';
-        var treason=cells[4]||'';
-        var sc2=tconf.match(/(\d)/); var scn=sc2?parseInt(sc2[1]):0;
-        var isOv2=/\bOVER\b/i.test(tpick),isUn2=/\bUNDER\b/i.test(tpick);
-        var isML2=/moneyline|\bML\b|\bWIN\b/i.test(ttype);
-        var cls2=isML2?'ml':isOv2?'ov':isUn2?'un':'gen';
-        current.recs.push({cls:cls2,typeLabel:ttype.toUpperCase(),body:tpick+(treason?' — '+treason:''),conf:String(scn),game:tgame});
-      }
-      continue;
-    }
     // Plain text → analysis
     if(trim&&trim.charAt(0)!=='#'){
       var clean=trim.replace(/\*\*/g,'');
@@ -1098,7 +1079,8 @@ function renderCards(text) {
       card.recs.forEach(function(r){
         var sc=r.conf?parseInt(r.conf):0;
         var rc=sc>=4?'var(--green)':sc===3?'var(--amber)':sc>0?'var(--red)':'var(--dim)';
-        html+='<div class="rec '+r.cls+'">';
+        var dimPick=sc>0&&sc<=2?'opacity:0.4;':sc===3?'opacity:0.7;':'';
+        html+='<div class="rec '+r.cls+'" style="'+dimPick+'">';
         html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">';
         html+='<div class="rec-type">'+escH(r.typeLabel)+'</div>';
         if(sc>0){
