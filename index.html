@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pitcher Bet Scout v6</title>
+<title>Pitcher Bet Scout v7</title>
 <style>
 /* system fonts — no external dependency */
 
@@ -338,7 +338,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="logo">⚾</div>
     <div>
       <span class="app-name">Pitcher Bet Scout</span>
-      <span class="app-sub">// v6 · Gemini 2.5 Flash · Free</span>
+      <span class="app-sub">// v7 · Gemini 2.5 Flash · Free</span>
     </div>
   </div>
 </div>
@@ -555,26 +555,25 @@ function setStatus(msg, live) {
   el.className = 'status-txt'+(live?' live':'');
 }
 
-// ── Single Gemini call WITH Google Search ──
+// ── Single Gemini call (free tier — googleSearch tool omitted, causes 500) ──
 async function geminiCall(systemText, userText, maxTokens) {
   var key = getKey();
   if (!key) throw new Error('No API key set');
+  // Fold system text into user message
+  var fullText = systemText ? systemText + '\n\n---\n\n' + userText : userText;
   var body = {
-    contents: [{ role:'user', parts:[{ text: userText }] }],
-    tools: [{ googleSearch:{} }],
+    contents: [{ role:'user', parts:[{ text: fullText }] }],
     generationConfig: { maxOutputTokens: maxTokens||8192, temperature:0.3 }
   };
-  // systemInstruction not supported on free tier alongside search — fold into user message
-  if (systemText) {
-    body.contents = [{ role:'user', parts:[{ text: systemText + '\n\n---\n\n' + userText }] }];
-  }
   var res = await fetch(
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+key,
     { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }
   );
   if (!res.ok) {
-    var e = await res.json();
-    throw new Error(e.error && e.error.message ? e.error.message : 'Gemini API error ('+res.status+')');
+    var e = await res.json().catch(function(){return {};});
+    var msg = e.error && e.error.message ? e.error.message : 'Gemini API error ('+res.status+')';
+    if (res.status === 500) msg += ' — verify your key is active at aistudio.google.com';
+    throw new Error(msg);
   }
   var data = await res.json();
   if (!data.candidates || !data.candidates[0]) throw new Error('No candidates returned from Gemini');
@@ -645,7 +644,11 @@ async function fetchPitcherStats(pitcherId) {
     var gRes = await fetch('https://statsapi.mlb.com/api/v1/people/'+pitcherId+'/stats?stats=gameLog&group=pitching&season='+yr);
     var gData = await gRes.json();
     var gSplits = gData.stats&&gData.stats[0]&&gData.stats[0].splits||[];
-    var lastStarts = gSplits.slice(-4).reverse();
+    // Filter to true starts only: game started (isGameStarted) or IP >= 3 as a fallback
+    var startsOnly = gSplits.filter(function(x){
+      return x.isGameStarted === true || parseFloat(x.stat&&x.stat.inningsPitched||0) >= 3;
+    });
+    var lastStarts = startsOnly.slice(-4).reverse();
     return { season:season, lastStarts:lastStarts };
   } catch(e) { return { season:null, lastStarts:[] }; }
 }
@@ -904,7 +907,7 @@ async function runAnalysis() {
       : '';
 
     var fullPrompt =
-      'You are a sharp MLB betting analyst. Use the real pitcher data provided below, then use Google Search as instructed.\n\n' +
+      'You are a sharp MLB betting analyst. Use the real pitcher data provided below, plus your own knowledge of current MLB stats and trends.\n\n' +
       'WHAT TO SEARCH:\n' + mlSearch + kSearch + rSearch +
       '\nCRITICAL RULES:\n' +
       '1. Give a specific pick for EVERY bet type for EVERY game. Never skip.\n' +
@@ -927,10 +930,14 @@ async function runAnalysis() {
       recLines.join('\n') + '\n\n' +
       'PICK LINE FORMAT (use exactly):\n' +
       '- [BET TYPE]: [DIRECTION + LINE] | Confidence: X/5 | [reason]\n\n' +
+      'REASONING RULE — saves tokens, follow strictly:\n' +
+      '- Confidence 4-5/5: include reason (1 short phrase, stats only, no padding)\n' +
+      '- Confidence 3/5: include reason (stats only, max 8 words)\n' +
+      '- Confidence 1-2/5: NO reason field at all — end the line after the confidence\n\n' +
       'Examples:\n' +
-      '- Strikeouts: OVER 6.5 Ks | Confidence: 4/5 | K%=29%, opp K%=26%, last 3: 7,8,6\n' +
+      '- Strikeouts: OVER 6.5 Ks | Confidence: 5/5 | K%=29%, opp K%=26%, last 3: 7,8,6\n' +
       '- Walks: UNDER 2.5 BBs | Confidence: 3/5 | BB/9=2.1, last 4: 1,2,1,2\n' +
-      '- Total Runs: UNDER 8.5 | Confidence: 3/5 | elite ERAs, PF=95, wind in\n' +
+      '- Total Runs: UNDER 8.5 | Confidence: 2/5\n' +
       '- Moneyline: Yankees -145 | Confidence: 4/5 | 8-2 last 10, top-5 bullpen\n\n' +
       '---\n\n' +
       '## BEST BET OF THE DAY\n' +
@@ -968,15 +975,24 @@ async function runAnalysis() {
 // ══════════════════════════════
 // RENDER CARDS
 // ══════════════════════════════
+
+// Safely extract a 1-5 confidence integer from any string Gemini might produce:
+// "4", "4/5", "Confidence: 4/5", "4 out of 5", etc.
+function parseConf(s) {
+  if (!s) return 0;
+  var m = String(s).match(/([1-5])/);
+  return m ? parseInt(m[1]) : 0;
+}
+
 function confScore(card) {
   // For per-pick confidence, use the highest confidence among all picks on the card
   if (card.isBest) return 999;
   var max=0;
   card.recs.forEach(function(r){
-    var m=r.conf.match(/(\d)/); if(m){ var n=parseInt(m[1]); if(n>max)max=n; }
+    var n=parseConf(r.conf); if(n>max)max=n;
   });
   // Also check legacy card-level conf
-  if (card.conf) { var m=card.conf.match(/(\d)/); if(m&&parseInt(m[1])>max)max=parseInt(m[1]); }
+  var n=parseConf(card.conf); if(n>max)max=n;
   return max;
 }
 
@@ -1077,7 +1093,7 @@ function renderCards(text) {
     if(card.recs.length>0){
       html+='<div class="recs-label">Picks</div><div class="recs-list">';
       card.recs.forEach(function(r){
-        var sc=r.conf?parseInt(r.conf):0;
+        var sc=parseConf(r.conf);
         var rc=sc>=4?'var(--green)':sc===3?'var(--amber)':sc>0?'var(--red)':'var(--dim)';
         var dimPick=sc>0&&sc<=2?'opacity:0.4;':sc===3?'opacity:0.7;':'';
         html+='<div class="rec '+r.cls+'" style="'+dimPick+'">';
@@ -1124,7 +1140,7 @@ function exportTxt() {
     lastCards.forEach(function(card){
       if(card.isBest)return;
       card.recs.forEach(function(rec){
-        var sc=rec.conf?parseInt(rec.conf):0;
+        var sc=parseConf(rec.conf);
         allPicks.push({game:card.title,type:rec.typeLabel,body:rec.body,conf:sc});
       });
     });
@@ -1167,7 +1183,7 @@ function importPicksFromAnalysis(cards){
   cards.forEach(function(card){
     if(card.isBest)return;
     card.recs.forEach(function(rec){
-      var sc=rec.conf?parseInt(rec.conf):0; if(sc<4)return;
+      var sc=parseConf(rec.conf); if(sc<4)return;
       var isDup=bets.some(function(b){return b.date===today&&b.game===card.title&&b.type===rec.typeLabel&&b.pick===rec.body;});
       if(isDup)return;
       bets.push({id:Date.now()+Math.random(),date:today,game:card.title,type:rec.typeLabel,pick:rec.body,conf:sc,result:'P',units:1});
