@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pitcher Bet Scout v6</title>
+<title>Pitcher Bet Scout v7</title>
 <style>
 /* system fonts — no external dependency */
 
@@ -263,6 +263,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .rec.un .rec-type{color:var(--blue);}
 .rec.ml .rec-type{color:var(--amber);}
 .rec.gen .rec-type{color:var(--dim);}
+/* Border colors by bet type */
+.rec.ov{border-left-color:var(--green);}
+.rec.ml{border-left-color:var(--amber);}
 .rec-body{color:var(--text);}
 
 .conf-row{
@@ -338,7 +341,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="logo">⚾</div>
     <div>
       <span class="app-name">Pitcher Bet Scout</span>
-      <span class="app-sub">// v6 · Gemini 2.5 Flash · Free</span>
+      <span class="app-sub">// v7 · Gemini 2.5 Flash · Free</span>
     </div>
   </div>
 </div>
@@ -495,6 +498,9 @@ function switchTab(tab) {
   if (tab==='tracker') renderTracker();
 }
 
+// ── Model ──
+var GEMINI_MODEL = 'gemini-2.5-flash';
+
 // ── State ──
 var matchups   = [];
 var lastReport = '';
@@ -569,7 +575,7 @@ async function geminiCall(systemText, userText, maxTokens) {
     body.contents = [{ role:'user', parts:[{ text: systemText + '\n\n---\n\n' + userText }] }];
   }
   var res = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+key,
+    'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent?key='+key,
     { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }
   );
   if (!res.ok) {
@@ -586,7 +592,7 @@ async function geminiCallNoSearch(prompt, maxTokens) {
   var key = getKey();
   if (!key) throw new Error('No API key set');
   var res = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+key,
+    'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent?key='+key,
     { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         contents:[{role:'user',parts:[{text:prompt}]}],
@@ -623,6 +629,29 @@ async function fetchMLBSchedule(dateStr) {
     });
   });
   return games;
+}
+
+// ── Resolve pitcher ID by name (for manual entries) ──
+async function resolvePlayerIdByName(name) {
+  if (!name || name === 'TBD') return null;
+  try {
+    var res = await fetch('https://statsapi.mlb.com/api/v1/people/search?names='+encodeURIComponent(name)+'&sportId=1');
+    var d = await res.json();
+    return (d.people && d.people[0]) ? d.people[0].id : null;
+  } catch(e) { return null; }
+}
+
+// ── Batched fetch with concurrency cap and delay ──
+async function fetchPitcherStatsInBatches(pairs) {
+  var BATCH = 6, DELAY = 220;
+  var results = [];
+  for (var i = 0; i < pairs.length; i += BATCH) {
+    var batch = pairs.slice(i, i + BATCH);
+    var batchResults = await Promise.all(batch.map(function(p){ return fetchPitcherStats(p.id); }));
+    results = results.concat(batchResults);
+    if (i + BATCH < pairs.length) await new Promise(function(r){ setTimeout(r, DELAY); });
+  }
+  return results;
 }
 
 // ── MLB Stats API: pitcher season stats + last 4 starts ──
@@ -741,9 +770,9 @@ async function scrapeMatchups() {
       statusEl.className='scrape-status loaded';
       statusEl.innerHTML='<span style="font-family:var(--mono);font-size:20px;font-weight:600;color:var(--green);">'+matchups.length+'</span> games found <span style="font-size:10px;color:var(--muted);">via MLB API</span>';
     } else {
-      // Gemini fallback — 2-step to avoid citation brackets
+      // Gemini fallback — use no-search call to avoid burning grounded-search RPM quota
       statusEl.textContent='MLB API returned 0 games — trying Gemini...';
-      var rawText=await geminiCall(null,
+      var rawText=await geminiCallNoSearch(
         'Today is '+todayLong+'. List every MLB game today. One line per game: AWAY @ HOME — Away Pitcher vs Home Pitcher (Venue, Time ET). Use TBD if unknown. Plain text only.', 800);
       var jsonRaw=await geminiCallNoSearch(
         'Convert this MLB schedule to a JSON array. Fields: awayTeam,homeTeam,awayPitcher,homePitcher,venue,gameTime. Full team names. TBD for missing pitchers. Return ONLY the JSON array:\n\n'+rawText, 1500);
@@ -830,39 +859,35 @@ async function runAnalysis() {
   var ctx=document.getElementById('ctxInput').value.trim();
 
   try {
-    // ── Silently fetch MLB pitcher stats (no status flicker, best-effort) ──
+    // ── Resolve missing pitcher IDs (manual entries) then fetch stats in safe batches ──
     setStatus('Fetching pitcher stats...', true);
-    var pitcherDataMap={};
-    var fetchQueue=[];
+    var pitcherPairs = [];
+    var seenNames = {};
     matchups.forEach(function(m){
-      [{name:m.awayPitcher,id:m.awayPitcherId},{name:m.homePitcher,id:m.homePitcherId}].forEach(function(tf){
-        if(tf.name&&tf.name!=='TBD'&&!pitcherDataMap[tf.name]&&fetchQueue.indexOf(tf.name)===-1){
-          fetchQueue.push(tf.name);
-          pitcherDataMap[tf.name]=fetchPitcherStats(tf.id); // store Promise
+      [{name:m.awayPitcher,id:m.awayPitcherId,ref:m,side:'awayPitcherId'},
+       {name:m.homePitcher,id:m.homePitcherId,ref:m,side:'homePitcherId'}].forEach(function(tf){
+        if (tf.name && tf.name !== 'TBD' && !seenNames[tf.name]) {
+          seenNames[tf.name] = true;
+          pitcherPairs.push({name:tf.name, id:tf.id, ref:tf.ref, side:tf.side});
         }
       });
     });
-    // Resolve all in parallel
-    var names=Object.keys(pitcherDataMap);
-    var results=await Promise.all(names.map(function(n){return pitcherDataMap[n];}));
-    names.forEach(function(n,i){ pitcherDataMap[n]=results[i]; });
-    console.log('Pitcher data loaded:', Object.keys(pitcherDataMap).length, 'pitchers');
 
-    // ── Build per-game context blocks ──
-    setStatus('Running analysis...', true);
-    var gameBlocks=matchups.map(function(m,idx){
-      var pf=getParkFactor(m.venue);
-      var pfNote=pf>=108?'HIGH offense park':pf<=95?'LOW offense park':'neutral park';
-      var awayStats=pitcherDataMap[m.awayPitcher]||{season:null,lastStarts:[]};
-      var homeStats=pitcherDataMap[m.homePitcher]||{season:null,lastStarts:[]};
-      return [
-        'GAME '+(idx+1)+': '+(m.awayTeam||m.awayPitcher)+' @ '+(m.homeTeam||m.homePitcher),
-        'Venue: '+(m.venue||'Unknown')+' | Park Factor: '+pf+' ('+pfNote+')',
-        'Time: '+(m.gameTime||'TBD'),
-        'AWAY: '+formatPitcherBlock(m.awayPitcher, awayStats),
-        'HOME: '+formatPitcherBlock(m.homePitcher, homeStats)
-      ].join('\n');
-    }).join('\n\n'+Array(55).join('-')+'\n\n');
+    // Resolve null IDs from name lookup (needed for manual entries)
+    var nullPairs = pitcherPairs.filter(function(p){ return !p.id; });
+    if (nullPairs.length) {
+      var resolvedIds = await Promise.all(nullPairs.map(function(p){ return resolvePlayerIdByName(p.name); }));
+      nullPairs.forEach(function(p, i){
+        p.id = resolvedIds[i];
+        if (p.id) p.ref[p.side] = p.id; // update matchup object in place
+      });
+    }
+
+    // Fetch all stats in batches of 6 with 220ms gap to avoid MLB API rate limits
+    var statsResults = await fetchPitcherStatsInBatches(pitcherPairs);
+    var pitcherDataMap = {};
+    pitcherPairs.forEach(function(p, i){ pitcherDataMap[p.name] = statsResults[i]; });
+    console.log('Pitcher data loaded:', Object.keys(pitcherDataMap).length, 'pitchers');
 
     // ── Bet type instruction blocks ──
     var recLines=[];
@@ -903,59 +928,149 @@ async function runAnalysis() {
       ? 'For totals: search both teams recent run totals (last 10 games), bullpen ERA, and weather at each venue.\n'
       : '';
 
-    var fullPrompt =
-      'You are a sharp MLB betting analyst. Use the real pitcher data provided below, then use Google Search as instructed.\n\n' +
-      'WHAT TO SEARCH:\n' + mlSearch + kSearch + rSearch +
-      '\nCRITICAL RULES:\n' +
-      '1. Give a specific pick for EVERY bet type for EVERY game. Never skip.\n' +
-      '2. CONFIDENCE is per individual pick — not per game. Each recommendation gets its own ★ rating.\n' +
-      '3. Never say "I cannot recommend" — always pick a side.\n' +
-      '4. SPRING TRAINING: ignore 2026 spring stats — use 2025 regular season data provided.\n' +
-      '5. Do NOT make up stats — if data is missing, say so and use search.\n\n' +
-      'TOKEN BUDGET IS LIMITED — follow these rules strictly:\n' +
-      '- Output EVERY game and EVERY pick. Do not skip any.\n' +
-      '- Be concise: one sentence per reason, no padding, no repetition.\n' +
-      '- Stat lines: keep to one line per pitcher.\n' +
-      '- Analysis: 1 sentence max.\n\n' +
-      'FORMAT EACH GAME EXACTLY LIKE THIS:\n\n' +
-      '## [Away Team] @ [Home Team] — [Away Pitcher] vs [Home Pitcher]\n' +
-      '**Away Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
-      '**Home Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
-      '**Park:** [park factor note]\n' +
-      '**Analysis:** [1 sentence]\n' +
-      '**Picks:**\n' +
-      recLines.join('\n') + '\n\n' +
-      'PICK LINE FORMAT (use exactly):\n' +
-      '- [BET TYPE]: [DIRECTION + LINE] | Confidence: X/5 | [reason]\n\n' +
-      'Examples:\n' +
-      '- Strikeouts: OVER 6.5 Ks | Confidence: 4/5 | K%=29%, opp K%=26%, last 3: 7,8,6\n' +
-      '- Walks: UNDER 2.5 BBs | Confidence: 3/5 | BB/9=2.1, last 4: 1,2,1,2\n' +
-      '- Total Runs: UNDER 8.5 | Confidence: 3/5 | elite ERAs, PF=95, wind in\n' +
-      '- Moneyline: Yankees -145 | Confidence: 4/5 | 8-2 last 10, top-5 bullpen\n\n' +
-      '---\n\n' +
+    // ── Build prompt for a subset of games ──
+    function buildChunkPrompt(chunkMatchups) {
+      var chunkBlocks = chunkMatchups.map(function(m, idx) {
+        var pf = getParkFactor(m.venue);
+        var pfNote = pf >= 108 ? 'HIGH offense park' : pf <= 95 ? 'LOW offense park' : 'neutral park';
+        var awayStats = pitcherDataMap[m.awayPitcher] || {season:null, lastStarts:[]};
+        var homeStats = pitcherDataMap[m.homePitcher] || {season:null, lastStarts:[]};
+        return [
+          'GAME '+(idx+1)+': '+(m.awayTeam||m.awayPitcher)+' @ '+(m.homeTeam||m.homePitcher),
+          'Venue: '+(m.venue||'Unknown')+' | Park Factor: '+pf+' ('+pfNote+')',
+          'Time: '+(m.gameTime||'TBD'),
+          'AWAY: '+formatPitcherBlock(m.awayPitcher, awayStats),
+          'HOME: '+formatPitcherBlock(m.homePitcher, homeStats)
+        ].join('\n');
+      }).join('\n\n'+Array(55).join('-')+'\n\n');
+
+      return (
+        'You are a sharp MLB betting analyst. Use the real pitcher data provided below, then use Google Search as instructed.\n\n' +
+        'WHAT TO SEARCH:\n' + mlSearch + kSearch + rSearch +
+        '\nCRITICAL RULES:\n' +
+        '1. Give a specific pick for EVERY bet type for EVERY game. Never skip.\n' +
+        '2. CONFIDENCE is per individual pick — not per game. Each recommendation gets its own ★ rating.\n' +
+        '3. Never say "I cannot recommend" — always pick a side.\n' +
+        '4. SPRING TRAINING: ignore 2026 spring stats — use 2025 regular season data provided.\n' +
+        '5. Do NOT make up stats — if data is missing, say so and use search.\n\n' +
+        'TOKEN BUDGET IS LIMITED — follow these rules strictly:\n' +
+        '- Output EVERY game and EVERY pick. Do not skip any.\n' +
+        '- Be concise: one sentence per reason, no padding, no repetition.\n' +
+        '- Stat lines: keep to one line per pitcher.\n' +
+        '- Analysis: 1 sentence max.\n\n' +
+        'FORMAT EACH GAME EXACTLY LIKE THIS:\n\n' +
+        '## [Away Team] @ [Home Team] — [Away Pitcher] vs [Home Pitcher]\n' +
+        '**Away Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
+        '**Home Pitcher:** ERA=X.XX, K/9=X.X, BB/9=X.X, K%=X%, BB%=X%, xwOBA=.XXX\n' +
+        '**Park:** [park factor note]\n' +
+        '**Analysis:** [1 sentence]\n' +
+        '**Picks:**\n' +
+        recLines.join('\n') + '\n\n' +
+        'PICK LINE FORMAT (use exactly):\n' +
+        '- [BET TYPE]: [DIRECTION + LINE] | Confidence: X/5 | [reason]\n\n' +
+        'Examples:\n' +
+        '- Strikeouts: OVER 6.5 Ks | Confidence: 4/5 | K%=29%, opp K%=26%, last 3: 7,8,6\n' +
+        '- Walks: UNDER 2.5 BBs | Confidence: 3/5 | BB/9=2.1, last 4: 1,2,1,2\n' +
+        '- Total Runs: UNDER 8.5 | Confidence: 3/5 | elite ERAs, PF=95, wind in\n' +
+        '- Moneyline: Yankees -145 | Confidence: 4/5 | 8-2 last 10, top-5 bullpen\n\n' +
+        '---\n\n' +
+        'TODAY\'S PITCHER DATA (from MLB Stats API):\n\n' +
+        chunkBlocks +
+        '\n\n' + (ctx ? 'BETTING LINES:\n'+ctx+'\n\n' : '') +
+        'Now search for what is needed, then give every pick for: ' +
+        bets.map(function(b){return{strikeouts:'Strikeouts',walks:'Walks',runs:'Total Runs',moneyline:'Moneyline'}[b];}).join(', ') + '.'
+      );
+    }
+
+    // ── Split matchups into chunks of 5, run in parallel, merge ──
+    var CHUNK_SIZE = 5;
+    var chunks = [];
+    for (var ci = 0; ci < matchups.length; ci += CHUNK_SIZE) {
+      chunks.push(matchups.slice(ci, ci + CHUNK_SIZE));
+    }
+    setStatus('Running analysis ('+chunks.length+' batch'+(chunks.length>1?'es':'')+')...', true);
+
+    // Run chunks sequentially to respect free-tier RPM limits (parallel causes 429s / silent drops)
+    var chunkTexts = [];
+    for (var ci2 = 0; ci2 < chunks.length; ci2++) {
+      setStatus('Analyzing batch '+(ci2+1)+' of '+chunks.length+'...', true);
+      var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 8192);
+      if (!chunkResult || !chunkResult.trim()) {
+        console.warn('Chunk '+(ci2+1)+' returned empty — retrying once...');
+        await new Promise(function(r){ setTimeout(r, 3000); });
+        chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 8192);
+      }
+      chunkTexts.push(chunkResult);
+      // Brief pause between chunks to stay within RPM quota
+      if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 1500); });
+    }
+
+    var mergedPicksText = chunkTexts.join('\n\n');
+
+    // ── Step 2: dedicated best-bet call from the full pick list ──
+    setStatus('Selecting best bet...', true);
+    var bestBetRaw = await geminiCallNoSearch(
+      'You are a sharp MLB betting analyst. Below are all the picks generated for today\'s slate.\n\n' +
+      'Your job: identify the single BEST BET OF THE DAY — the pick with the clearest edge, strongest data support, and highest confidence.\n\n' +
+      'RULES:\n' +
+      '- Pick must come from the analysis below (do not invent new games or stats).\n' +
+      '- Prefer 5★ picks; only go lower if no 5★ exists.\n' +
+      '- Do NOT repeat the entire analysis. Output ONLY the block below, nothing else.\n\n' +
+      'OUTPUT FORMAT (exact):\n' +
       '## BEST BET OF THE DAY\n' +
-      '**Pick:** [full pick]\n' +
-      '**Reasoning:** [2 sentences]\n' +
+      '**Pick:** [full pick e.g. "Yankees -145 ML" or "Cole OVER 7.5 Ks"]\n' +
+      '**Reasoning:** [exactly 2 sentences explaining the edge]\n' +
       '**Confidence:** 5/5\n\n' +
       '---\n\n' +
-      'TODAY\'S PITCHER DATA (from MLB Stats API):\n\n' +
-      gameBlocks +
-      '\n\n' + (ctx ? 'BETTING LINES:\n'+ctx+'\n\n' : '') +
-      'Now search for what is needed, then give every pick for: ' +
-      bets.map(function(b){return{strikeouts:'Strikeouts',walks:'Walks',runs:'Total Runs',moneyline:'Moneyline'}[b];}).join(', ') + '.';
+      'TODAY\'S FULL ANALYSIS:\n\n' +
+      mergedPicksText,
+      512
+    );
 
-    var text = await geminiCall(null, fullPrompt, 8192);
+    // Extract bestBet fields by splitting on ** markers — no fragile lookahead
+    var bbPick='', bbReason='', bbConf='5/5';
+    var bbText = bestBetRaw.trim();
+    console.log('[BEST BET RAW]', bbText);
+
+    // Split on any **Label:** boundary to get each field's value
+    function extractField(src, label) {
+      var re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\*\\*[A-Za-z]|^##|---\\s*$|\\Z)', 'im');
+      var m = src.match(re);
+      if (!m) {
+        // Fallback: grab everything after the label to end of string / next ** field
+        var idx = src.indexOf('**' + label + ':**');
+        if (idx === -1) idx = src.toLowerCase().indexOf('**' + label.toLowerCase() + ':**');
+        if (idx === -1) return '';
+        var after = src.slice(idx + label.length + 6);
+        var next = after.search(/\*\*[A-Za-z]|^##|^---/m);
+        return (next === -1 ? after : after.slice(0, next)).replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
+      }
+      return m[1].replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
+    }
+
+    bbPick   = extractField(bbText, 'Pick');
+    bbReason = extractField(bbText, 'Reasoning');
+    bbConf   = extractField(bbText, 'Confidence') || '5/5';
+
+    // Build a clean, single-line best-bet block that the parser won't choke on
+    var bestBetBlock =
+      '\n\n## BEST BET OF THE DAY\n' +
+      '**Pick:** ' + bbPick + '\n' +
+      '**Reasoning:** ' + bbReason + '\n' +
+      '**Confidence:** ' + bbConf + '\n';
+
+    var text = mergedPicksText + bestBetBlock;
+
     if (!text.trim()) throw new Error('No response returned. Please try again.');
 
     lastReport=text;
     stopTimer();
-    setStatus('Analysis complete — '+matchups.length+' games — '+new Date().toLocaleTimeString());
+    setStatus('Analysis complete — '+matchups.length+' games across '+chunks.length+' batch'+(chunks.length>1?'es':'')+' — '+new Date().toLocaleTimeString());
     var renderedCards=renderCards(text);
     lastCards=renderedCards||[];
     document.getElementById('exportBtn').style.display='block';
     var added=importPicksFromAnalysis(renderedCards);
     if (added>0) setStatus('Analysis complete — '+matchups.length+' games — '+added+' picks auto-tracked (4-5★) — '+new Date().toLocaleTimeString());
-
   } catch(err) {
     stopTimer(); setStatus('Error — check key and try again');
     document.getElementById('output').innerHTML=
@@ -1000,33 +1115,38 @@ function renderCards(text) {
     var bm=trim.match(/^\*\*(.+?):\*\*\s*(.*)$/);
     if(bm){
       var label=bm[1].replace(/\*/g,'').trim(), val=bm[2].replace(/\*/g,'').trim();
-      if(/^picks$/i.test(label)||/^bet rec/i.test(label)){ inPicks=true; continue; }
+      if(/^picks$/i.test(label)||/^bet rec/i.test(label)||/^strikeout|^walk|^total run|^moneyline/i.test(label)){ inPicks=true; continue; }
       if(/^confidence$/i.test(label)){ current.conf=val; inPicks=false; continue; }
       if(/analysis|matchup|park/i.test(label)){ current.analysis+=val+' '; inPicks=false; continue; }
+      // BEST BET dedicated fields — values guaranteed single-line by pre-parsing
+      if(current.isBest){
+        if(/^pick$/i.test(label)){ current.bestPick=val; inPicks=false; continue; }
+        if(/^reasoning$/i.test(label)){ current.bestReasoning=val; inPicks=false; continue; }
+      }
       inPicks=false; current.rows.push({key:label,val:val}); continue;
     }
+
+    // No continuation needed — bestBetRaw is pre-parsed to single lines before renderCards
 
     // Pick lines: - BET TYPE: DIRECTION | Confidence: X/5 | reason
     if((trim.charAt(0)==='-'||trim.charAt(0)==='*')&&inPicks){
       var raw=trim.replace(/^[-*]\s*/,'').replace(/\*\*/g,'');
 
-      // Parse inline confidence: "| Confidence: X/5 |"
+      // Parse inline confidence: "| Confidence: X/5 |" — tolerant of spacing variants
       var pickConf='';
-      var confMatch=raw.match(/\|\s*[Cc]onfidence:\s*(\d\/5|\d)\s*\|?/);
-      if(confMatch){ pickConf=confMatch[1].replace('/5',''); raw=raw.replace(confMatch[0],'').trim(); }
+      var confMatch=raw.match(/[Cc]onfidence:\s*(\d)\s*(?:\/\s*5)?/);
+      if(confMatch){ pickConf=confMatch[1]; raw=raw.replace(confMatch[0],'').replace(/\|/g,'').trim(); }
 
-      var isOv=/\bOVER\b/i.test(raw), isUn=/\bUNDER\b/i.test(raw);
-      var isML=/moneyline|money line|\bML\b|\bWIN\b|to win/i.test(raw);
-      var cls=isML?'ml':isOv?'ov':isUn?'un':'gen';
-
-      // Extract type label from "TYPE: content" pattern
+      // Extract type label first, then derive cls from bet type — not from OVER/UNDER direction
       var colonIdx=raw.indexOf(':');
       var typeLabel='REC', body=raw;
       if(colonIdx>0&&colonIdx<30){
         typeLabel=raw.substring(0,colonIdx).trim().toUpperCase();
         body=raw.substring(colonIdx+1).trim();
       }
-      if(isML)typeLabel='MONEYLINE';
+      // cls always gen — border color is set inline by confidence score after push
+      var cls = 'gen';
+      if(/moneyline|money line|\bML\b/i.test(typeLabel)) typeLabel='MONEYLINE';
 
       current.recs.push({cls:cls,typeLabel:typeLabel,body:body,conf:pickConf});
       continue;
@@ -1045,12 +1165,16 @@ function renderCards(text) {
     return;
   }
 
-  cards.sort(function(a,b){return confScore(b)-confScore(a);});
+  // Pin BEST BET as banner above game cards; sort game cards by confidence independently
+  var bestCard = cards.find(function(c){ return c.isBest; });
+  var gameCards = cards.filter(function(c){ return !c.isBest; });
+  gameCards.sort(function(a,b){ return confScore(b)-confScore(a); });
+  var orderedCards = bestCard ? [bestCard].concat(gameCards) : gameCards;
 
   var html='<div class="cards-wrap">';
   html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:0.08em;"><span style="color:var(--amber);">&#9660;</span> SORTED BY HIGHEST PICK CONFIDENCE</div>';
 
-  cards.forEach(function(card){
+  orderedCards.forEach(function(card){
     var score=confScore(card);
     var rankColor=score>=4?'var(--green)':score===3?'var(--amber)':'var(--red)';
     html+='<div class="game-card'+(card.isBest?' best':'')+'">';
@@ -1064,25 +1188,43 @@ function renderCards(text) {
     html+='</div>';
     html+='<div class="card-body">';
 
-    if(card.rows.length>0){
+    // BEST BET: dedicated Pick / Reasoning / Confidence layout
+    if(card.isBest){
+      var bp=card.bestPick||(card.rows.find(function(r){return /^pick$/i.test(r.key);})||{val:''}).val;
+      var br=card.bestReasoning||(card.rows.find(function(r){return /^reasoning$/i.test(r.key);})||{val:''}).val||card.analysis.trim();
+      var bConf=card.conf||'5/5';
+      var bsc=parseInt((bConf.match(/(\d)/)||['','5'])[1]);
+      var brc=bsc>=4?'var(--green)':bsc===3?'var(--amber)':'var(--red)';
       html+='<div class="stat-grid">';
-      card.rows.forEach(function(r){
-        var isFull=r.val.length>60;
-        html+='<div class="stat-row2'+(isFull?' full-row':'')+'"><div class="stat-key">'+escH(r.key)+'</div><div class="stat-val">'+escH(r.val)+'</div></div>';
-      });
+      html+='<div class="stat-row2 full-row"><div class="stat-key">Pick</div><div class="stat-val" style="color:var(--text);font-weight:600;">'+escH(bp||'—')+'</div></div>';
+      html+='<div class="stat-row2 full-row"><div class="stat-key">Reasoning</div><div class="stat-val">'+escH(br||'—')+'</div></div>';
       html+='</div>';
+      html+='<div class="conf-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">';
+      html+='<span style="color:var(--dim);">Confidence</span>';
+      html+='<span style="color:'+brc+';">'+'★'.repeat(bsc)+'☆'.repeat(5-bsc)+'</span>';
+      html+='<span style="color:var(--muted);font-family:var(--mono);font-size:11px;">'+escH(bConf)+'</span>';
+      html+='</div>';
+    } else {
+      if(card.rows.length>0){
+        html+='<div class="stat-grid">';
+        card.rows.forEach(function(r){
+          var isFull=r.val.length>60;
+          html+='<div class="stat-row2'+(isFull?' full-row':'')+'"><div class="stat-key">'+escH(r.key)+'</div><div class="stat-val">'+escH(r.val)+'</div></div>';
+        });
+        html+='</div>';
+      }
+      if(card.analysis.trim()) html+='<div class="analysis-block">'+escH(card.analysis.trim())+'</div>';
     }
-    if(card.analysis.trim()) html+='<div class="analysis-block">'+escH(card.analysis.trim())+'</div>';
 
     if(card.recs.length>0){
       html+='<div class="recs-label">Picks</div><div class="recs-list">';
       card.recs.forEach(function(r){
         var sc=r.conf?parseInt(r.conf):0;
-        var rc=sc>=4?'var(--green)':sc===3?'var(--amber)':sc>0?'var(--red)':'var(--dim)';
+        var rc=sc>=4?'#00d98b':sc===3?'#f5a623':sc>0?'#ff5252':'#4a5268';
         var dimPick=sc>0&&sc<=2?'opacity:0.4;':sc===3?'opacity:0.7;':'';
-        html+='<div class="rec '+r.cls+'" style="'+dimPick+'">';
+        html+='<div class="rec '+r.cls+'" style="'+dimPick+'border-left-color:'+rc+';">';
         html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">';
-        html+='<div class="rec-type">'+escH(r.typeLabel)+'</div>';
+        html+='<div class="rec-type" style="color:'+rc+';">'+escH(r.typeLabel)+'</div>';
         if(sc>0){
           html+='<div style="display:flex;align-items:center;gap:5px;">';
           html+='<span style="font-family:var(--mono);font-size:10px;color:'+rc+';">'+'★'.repeat(sc)+'☆'.repeat(5-sc)+'</span>';
@@ -1096,8 +1238,8 @@ function renderCards(text) {
       html+='</div>';
     }
 
-    // Legacy card-level confidence (BEST BET card)
-    if(card.isBest&&card.conf){
+    // Confidence row for non-best cards with a card-level conf value
+    if(!card.isBest&&card.conf){
       var sm=card.conf.match(/(\d)/), sc2=sm?parseInt(sm[1]):0;
       var rc2=sc2>=4?'var(--green)':sc2===3?'var(--amber)':'var(--red)';
       html+='<div class="conf-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">';
@@ -1110,7 +1252,7 @@ function renderCards(text) {
   });
   html+='</div>';
   document.getElementById('output').innerHTML=html;
-  return cards;
+  return orderedCards;
 }
 
 // ── Export ──
