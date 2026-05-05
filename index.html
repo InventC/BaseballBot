@@ -434,8 +434,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
       <button class="btn-analyze" id="analyzeBtn" onclick="runAnalysis()" disabled>
         ANALYZE ALL MATCHUPS →
       </button>
+      <button class="btn-analyze" id="chunkBtn" onclick="runNextChunk()" disabled style="background:var(--s3);border-color:var(--amber);color:var(--amber);display:none;">
+        &#9654; RUN NEXT CHUNK
+      </button>
+      <div id="chunkProgress" style="display:none;font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;"></div>
       <button class="btn-export visible" id="exportBtn" onclick="exportTxt()" style="display:none;">
-        ↓ EXPORT REPORT AS .TXT
+        &#8595; EXPORT REPORT AS .TXT
       </button>
     </div>
 
@@ -840,6 +844,68 @@ function parseOddsText(text) {
 }
 
 // ══════════════════════════════════════════════════════
+// MANUAL CHUNK STATE — for busy-server / rate-limit mode
+// ══════════════════════════════════════════════════════
+var _chunkState = null;
+
+function updateChunkProgress() {
+  var el = document.getElementById('chunkProgress');
+  var btn = document.getElementById('chunkBtn');
+  if (!_chunkState) { el.style.display='none'; return; }
+  var done = _chunkState.chunksDone;
+  var total = _chunkState.chunks.length;
+  el.style.display = 'block';
+  if (done >= total) {
+    btn.style.display = 'none';
+    el.textContent = 'All ' + total + ' chunks done — finalizing...';
+  } else {
+    btn.disabled = false;
+    btn.innerHTML = '&#9654; RUN CHUNK ' + (done+1) + ' of ' + total;
+    el.textContent = 'Chunk ' + done + ' of ' + total + ' complete. Ready for next.';
+  }
+}
+
+async function runNextChunk() {
+  if (!_chunkState) return;
+  var btn = document.getElementById('chunkBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>RUNNING CHUNK...';
+  var s = _chunkState;
+  var ci = s.chunksDone;
+  if (ci >= s.chunks.length) return;
+
+  setStatus('Analyzing chunk ' + (ci+1) + ' of ' + s.chunks.length + '...', true);
+  var result = await geminiCall(null, s.buildPrompt(s.chunks[ci]), 10000);
+
+  if (!result || !result.trim()) {
+    setStatus('Chunk ' + (ci+1) + ' came back empty — server may be busy. Wait 30s then click Run Next Chunk to retry.', false);
+    btn.disabled = false;
+    btn.innerHTML = '&#9654; RETRY CHUNK ' + (ci+1) + ' of ' + s.chunks.length;
+    return;
+  }
+
+  s.chunkTexts.push(result);
+  s.chunksDone++;
+
+  // Show partial results immediately
+  renderCards(s.chunkTexts.join('\n\n'));
+
+  if (s.chunksDone >= s.chunks.length) {
+    updateChunkProgress();
+    await finalizeAnalysis(s.chunkTexts, s.matchupCount);
+    _chunkState = null;
+    document.getElementById('chunkBtn').style.display = 'none';
+    document.getElementById('chunkProgress').style.display = 'none';
+    document.getElementById('analyzeBtn').disabled = false;
+    document.getElementById('analyzeBtn').textContent = 'ANALYZE ALL MATCHUPS →';
+    stopTimer();
+  } else {
+    updateChunkProgress();
+    setStatus('Chunk ' + s.chunksDone + ' of ' + s.chunks.length + ' done. Click Run Next Chunk when ready.', false);
+  }
+}
+
+// ══════════════════════════════════════════════════════
 // RUN ANALYSIS — single Gemini call, MLB data pre-loaded
 // ══════════════════════════════════════════════════════
 async function runAnalysis() {
@@ -990,95 +1056,56 @@ async function runAnalysis() {
       );
     }
 
-    // ── Split matchups into chunks of 3, run sequentially, merge ──
+    // ── Split matchups into chunks of 3 ──
     var CHUNK_SIZE = 3;
     var chunks = [];
     for (var ci = 0; ci < matchups.length; ci += CHUNK_SIZE) {
       chunks.push(matchups.slice(ci, ci + CHUNK_SIZE));
     }
-    setStatus('Running analysis ('+chunks.length+' batch'+(chunks.length>1?'es':'')+')...', true);
 
-    // Run chunks sequentially to respect free-tier RPM limits (parallel causes 429s / silent drops)
-    var chunkTexts = [];
+    // Store chunk state globally so runNextChunk() can access it
+    _chunkState = {
+      chunks: chunks,
+      chunkTexts: [],
+      chunksDone: 0,
+      matchupCount: matchups.length,
+      buildPrompt: buildChunkPrompt
+    };
+
+    // Show manual chunk button + progress
+    var chunkBtn = document.getElementById('chunkBtn');
+    chunkBtn.style.display = 'block';
+    updateChunkProgress();
+
+    setStatus('Ready to analyze '+chunks.length+' chunk'+(chunks.length>1?'s':'')+'. Click Run Next Chunk — or wait for auto-run below.', false);
+
+    // Auto-run all chunks sequentially with pause between
     for (var ci2 = 0; ci2 < chunks.length; ci2++) {
-      setStatus('Analyzing batch '+(ci2+1)+' of '+chunks.length+'...', true);
+      setStatus('Analyzing chunk '+(ci2+1)+' of '+chunks.length+'...', true);
+      chunkBtn.disabled = true;
       var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
       if (!chunkResult || !chunkResult.trim()) {
-        console.warn('Chunk '+(ci2+1)+' returned empty — retrying once...');
-        await new Promise(function(r){ setTimeout(r, 3000); });
-        chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
+        // Server busy — stop auto-run, let user continue manually
+        stopTimer();
+        setStatus('Server busy on chunk '+(ci2+1)+'. Click "Run Next Chunk" to retry when ready.', false);
+        _chunkState.chunksDone = ci2;
+        updateChunkProgress();
+        btn.disabled=false; btn.innerHTML='ANALYZE ALL MATCHUPS &rarr;';
+        return;
       }
-      chunkTexts.push(chunkResult);
-      // Brief pause between chunks to stay within RPM quota
+      _chunkState.chunkTexts.push(chunkResult);
+      _chunkState.chunksDone = ci2 + 1;
+      updateChunkProgress();
+      // Show partial results as each chunk completes
+      renderCards(_chunkState.chunkTexts.join('\n\n'));
       if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 2500); });
     }
 
-    var mergedPicksText = chunkTexts.join('\n\n');
+    await finalizeAnalysis(_chunkState.chunkTexts, matchups.length);
+    _chunkState = null;
+    chunkBtn.style.display = 'none';
+    document.getElementById('chunkProgress').style.display = 'none';
 
-    // ── Step 2: dedicated best-bet call from the full pick list ──
-    setStatus('Selecting best bet...', true);
-    var bestBetRaw = await geminiCallNoSearch(
-      'You are a sharp MLB betting analyst. Below are all the picks generated for today\'s slate.\n\n' +
-      'Your job: identify the single BEST BET OF THE DAY — the pick with the clearest edge, strongest data support, and highest confidence.\n\n' +
-      'RULES:\n' +
-      '- Pick must come from the analysis below (do not invent new games or stats).\n' +
-      '- Prefer 5★ picks; only go lower if no 5★ exists.\n' +
-      '- Do NOT repeat the entire analysis. Output ONLY the block below, nothing else.\n\n' +
-      'OUTPUT FORMAT (exact):\n' +
-      '## BEST BET OF THE DAY\n' +
-      '**Pick:** [full pick e.g. "Yankees -145 ML" or "Cole OVER 7.5 Ks"]\n' +
-      '**Reasoning:** [exactly 2 sentences explaining the edge]\n' +
-      '**Confidence:** 5/5\n\n' +
-      '---\n\n' +
-      'TODAY\'S FULL ANALYSIS:\n\n' +
-      mergedPicksText,
-      512
-    );
-
-    // Extract bestBet fields by splitting on ** markers — no fragile lookahead
-    var bbPick='', bbReason='', bbConf='5/5';
-    var bbText = bestBetRaw.trim();
-    console.log('[BEST BET RAW]', bbText);
-
-    // Split on any **Label:** boundary to get each field's value
-    function extractField(src, label) {
-      var re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\*\\*[A-Za-z]|^##|---\\s*$|\\Z)', 'im');
-      var m = src.match(re);
-      if (!m) {
-        // Fallback: grab everything after the label to end of string / next ** field
-        var idx = src.indexOf('**' + label + ':**');
-        if (idx === -1) idx = src.toLowerCase().indexOf('**' + label.toLowerCase() + ':**');
-        if (idx === -1) return '';
-        var after = src.slice(idx + label.length + 6);
-        var next = after.search(/\*\*[A-Za-z]|^##|^---/m);
-        return (next === -1 ? after : after.slice(0, next)).replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
-      }
-      return m[1].replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
-    }
-
-    bbPick   = extractField(bbText, 'Pick');
-    bbReason = extractField(bbText, 'Reasoning');
-    bbConf   = extractField(bbText, 'Confidence') || '5/5';
-
-    // Build a clean, single-line best-bet block that the parser won't choke on
-    var bestBetBlock =
-      '\n\n## BEST BET OF THE DAY\n' +
-      '**Pick:** ' + bbPick + '\n' +
-      '**Reasoning:** ' + bbReason + '\n' +
-      '**Confidence:** ' + bbConf + '\n';
-
-    var text = mergedPicksText + bestBetBlock;
-
-    if (!text.trim()) throw new Error('No response returned. Please try again.');
-
-    lastReport=text;
-    stopTimer();
-    setStatus('Analysis complete — '+matchups.length+' games across '+chunks.length+' batch'+(chunks.length>1?'es':'')+' — '+new Date().toLocaleTimeString());
-    var renderedCards=renderCards(text);
-    lastCards=renderedCards||[];
-    document.getElementById('exportBtn').style.display='block';
-    var added=importPicksFromAnalysis(renderedCards);
-    if (added>0) setStatus('Analysis complete — '+matchups.length+' games — '+added+' picks auto-tracked (4-5★) — '+new Date().toLocaleTimeString());
   } catch(err) {
     stopTimer(); setStatus('Error — check key and try again');
     document.getElementById('output').innerHTML=
@@ -1086,6 +1113,73 @@ async function runAnalysis() {
       '<br><br>Get a free Gemini key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a></div>';
   }
   btn.disabled=false; btn.innerHTML='ANALYZE ALL MATCHUPS &rarr;';
+}
+
+// ── Finalize: best-bet call + render full results ──
+async function finalizeAnalysis(chunkTexts, matchupCount) {
+  var mergedPicksText = chunkTexts.join('\n\n');
+
+  setStatus('Selecting best bet...', true);
+  var bestBetRaw = await geminiCallNoSearch(
+    'You are a sharp MLB betting analyst. Below are all the picks generated for today\'s slate.\n\n' +
+    'Your job: identify the single BEST BET OF THE DAY — the pick with the clearest edge, strongest data support, and highest confidence.\n\n' +
+    'RULES:\n' +
+    '- Pick must come from the analysis below (do not invent new games or stats).\n' +
+    '- Prefer 5★ picks; only go lower if no 5★ exists.\n' +
+    '- Do NOT repeat the entire analysis. Output ONLY the block below, nothing else.\n\n' +
+    'OUTPUT FORMAT (exact):\n' +
+    '## BEST BET OF THE DAY\n' +
+    '**Pick:** [full pick e.g. "Yankees -145 ML" or "Cole OVER 7.5 Ks"]\n' +
+    '**Reasoning:** [exactly 2 sentences explaining the edge]\n' +
+    '**Confidence:** 5/5\n\n' +
+    '---\n\n' +
+    'TODAY\'S FULL ANALYSIS:\n\n' +
+    mergedPicksText,
+    512
+  );
+
+  var bbPick='', bbReason='', bbConf='5/5';
+  var bbText = bestBetRaw.trim();
+
+  function extractField(src, label) {
+    var re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\*\\*[A-Za-z]|^##|---\\s*$|\\Z)', 'im');
+    var m = src.match(re);
+    if (!m) {
+      var idx = src.indexOf('**' + label + ':**');
+      if (idx === -1) idx = src.toLowerCase().indexOf('**' + label.toLowerCase() + ':**');
+      if (idx === -1) return '';
+      var after = src.slice(idx + label.length + 6);
+      var next = after.search(/\*\*[A-Za-z]|^##|^---/m);
+      return (next === -1 ? after : after.slice(0, next)).replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
+    }
+    return m[1].replace(/\*\*/g, '').replace(/\n+/g, ' ').trim();
+  }
+
+  bbPick   = extractField(bbText, 'Pick');
+  bbReason = extractField(bbText, 'Reasoning');
+  bbConf   = extractField(bbText, 'Confidence') || '5/5';
+
+  var bestBetBlock =
+    '\n\n## BEST BET OF THE DAY\n' +
+    '**Pick:** ' + bbPick + '\n' +
+    '**Reasoning:** ' + bbReason + '\n' +
+    '**Confidence:** ' + bbConf + '\n';
+
+  var text = mergedPicksText + bestBetBlock;
+  if (!text.trim()) throw new Error('No response returned. Please try again.');
+
+  lastReport = text;
+  stopTimer();
+  var renderedCards = renderCards(text);
+  lastCards = renderedCards || [];
+  document.getElementById('exportBtn').style.display = 'block';
+  var added = importPicksFromAnalysis(renderedCards);
+  var chunkCount = chunkTexts.length;
+  if (added > 0) {
+    setStatus('Analysis complete — '+matchupCount+' games — '+added+' picks auto-tracked (4-5★) — '+new Date().toLocaleTimeString());
+  } else {
+    setStatus('Analysis complete — '+matchupCount+' games across '+chunkCount+' chunks — '+new Date().toLocaleTimeString());
+  }
 }
 
 // ══════════════════════════════
