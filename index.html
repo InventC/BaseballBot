@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pitcher Bet Scout v7</title>
+<title>Pitcher Bet Scout v8</title>
 <style>
 /* system fonts — no external dependency */
 
@@ -341,7 +341,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="logo">⚾</div>
     <div>
       <span class="app-name">Pitcher Bet Scout</span>
-      <span class="app-sub">// v7 · Gemini 2.5 Flash · Free</span>
+      <span class="app-sub">// v8 · Gemini 2.5 Flash · Free</span>
     </div>
   </div>
 </div>
@@ -893,36 +893,44 @@ async function runAnalysis() {
     var recLines=[];
     if (doK) recLines.push(
       '- **Strikeouts (K prop):** Use the MLB K/9 and last-start K totals provided. ' +
-      'Also search Baseball Savant for this pitcher K% and opposing team K%. ' +
-      'OVER only if pitcher K/9>9.0 or K%>24% AND recent starts trend supports it. ' +
-      'UNDER if K/9<7.5 or K%<18% or last 3 starts all under the line. ' +
-      'State the line (e.g. OVER 5.5 Ks). ' +
-      'Confidence per pick: 4-5★ only if K% edge is clear AND recency confirms. Cap at 3★ if <30IP this season.'
+      'Search Baseball Savant for this pitcher\'s K%, Whiff%, CSW%, platoon splits (K% vs LHH and K% vs RHH), and the opposing LINEUP\'s K% as batters this season. ' +
+      'Estimate the opposing lineup handedness mix (majority LHH or RHH) and use the relevant platoon split K% as the primary strikeout metric — not the overall K%. ' +
+      'OVER when relevant platoon K%>26% OR overall K%>24%, AND last 3 starts trend supports it, AND opposing lineup K%>22%. ' +
+      'UNDER when relevant platoon K%<18% OR overall K/9<7.5 OR last 3 starts all under the line. ' +
+      'If neither threshold is cleanly met, pick the side with more supporting factors — always give a pick. ' +
+      'State the line (e.g. OVER 5.5 Ks). State pitcher K% vs dominant handedness and opposing lineup K% in your reason. ' +
+      'Confidence: 4-5★ only if platoon-adjusted K% edge is clear AND recency confirms AND opposing lineup K%>22%. Cap at 3★ if <30IP this season.'
     );
     if (doW) recLines.push(
-      '- **Walks (BB prop):** Use MLB BB/9 and last-start BB totals provided. ' +
-      'Also search Baseball Savant for this pitcher BB% and opposing team walk rate. ' +
-      'DEFAULT LEAN: UNDER — books shade walk props high. ' +
-      'OVER only if BB/9>4.5 or BB%>10% AND 2+ of last 4 starts had 3+ walks. ' +
+      '- **Walks (BB prop):** Search Baseball Savant for this pitcher\'s BB%, Zone%, First-Strike%, and last 4 game log BB totals. ' +
+      'DEFAULT LEAN: UNDER. ' +
+      'UNDER when BB/9<3.0 OR Zone%>50% OR First-Strike%>62%. ' +
+      'OVER when BB/9>4.0 AND BB%>9% AND Zone%<45% AND 2+ of last 4 starts had 3+ BBs. ' +
+      'If neither threshold is cleanly met, pick the side with more supporting factors — always give a pick. ' +
+      'State Zone% and First-Strike% in your reason. If Savant did not return them, say so and rely on BB/9 and game log. ' +
       'State the line (e.g. UNDER 2.5 BBs). ' +
-      'Confidence per pick: max 3★ for walk props unless BB%>12% with consistent multi-start evidence.'
+      'Confidence: 4★ if BB%, Zone%, First-Strike%, and last 4 start log all agree. 3★ if 3 of 4 agree. 2★ otherwise.'
     );
     if (doR) recLines.push(
       '- **Total Runs:** Use starter ERA and park factor already provided. ' +
-      'Search: (1) both teams runs scored/allowed last 10 games, (2) both bullpen ERAs + recent usage, (3) weather at the venue. ' +
-      'DEFAULT LEAN: UNDER. OVER only if park factor>105 AND both offenses hot (>5 R/G last 10) AND wind blowing out. ' +
+      'Search: (1) both teams R/G and OPS last 10 games, (2) both bullpen ERAs + games pitched last 3 days, ' +
+      '(3) weather — wind speed and direction at the venue today, (4) both starters\' FIP or xERA from Baseball Savant. ' +
+      'DEFAULT LEAN: UNDER. OVER only if park factor>105 AND both offenses averaging >5 R/G last 10 AND wind blowing out >8mph. ' +
+      'Always state the wind speed/direction you found and both starters\' FIP in your reason. Always give a pick. ' +
       'State the line (e.g. UNDER 8.5). ' +
-      'Confidence per pick: max 3★ unless 4+ factors all point same direction.'
+      'Confidence: 3★ max unless 4+ factors all agree (park, both offenses hot, wind out, thin bullpens, high FIPs).'
     );
     if (doML) recLines.push(
-      '- **Moneyline:** Pick the specific team to WIN. State odds, your estimated win%, implied win%, and VALUE or NO VALUE. Never skip a game.'
+      '- **Moneyline:** Pick the specific team to WIN. ' +
+      'State both teams bullpen ERA and games pitched last 3 days, odds, your estimated win%, implied win%, and VALUE or NO VALUE. Never skip a game.'
     );
 
     var mlSearch = doML
       ? 'For moneyline: search both teams record, last 10 games, bullpen ERA and recent usage, injuries.\n'
       : '';
     var kSearch  = (doK||doW)
-      ? 'For K and BB props: search Baseball Savant probable pitchers page for K%, BB%, xwOBA, Whiff%, CSW%.\n'
+      ? (doK ? 'For K props: search Baseball Savant probable pitchers page for K%, Whiff%, CSW%, platoon splits (K% vs LHH and vs RHH), and opposing lineup K% as batters. Also estimate if opposing lineup is majority LHH or RHH.\n' : '') +
+        (doW ? 'For BB props: search Baseball Savant for each pitcher\'s BB%, Zone%, First-Strike%, and last 4 game log.\n' : '')
       : '';
     var rSearch  = doR
       ? 'For totals: search both teams recent run totals (last 10 games), bullpen ERA, and weather at each venue.\n'
@@ -982,8 +990,8 @@ async function runAnalysis() {
       );
     }
 
-    // ── Split matchups into chunks of 5, run in parallel, merge ──
-    var CHUNK_SIZE = 5;
+    // ── Split matchups into chunks of 3, run sequentially, merge ──
+    var CHUNK_SIZE = 3;
     var chunks = [];
     for (var ci = 0; ci < matchups.length; ci += CHUNK_SIZE) {
       chunks.push(matchups.slice(ci, ci + CHUNK_SIZE));
@@ -994,15 +1002,15 @@ async function runAnalysis() {
     var chunkTexts = [];
     for (var ci2 = 0; ci2 < chunks.length; ci2++) {
       setStatus('Analyzing batch '+(ci2+1)+' of '+chunks.length+'...', true);
-      var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 8192);
+      var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
       if (!chunkResult || !chunkResult.trim()) {
         console.warn('Chunk '+(ci2+1)+' returned empty — retrying once...');
         await new Promise(function(r){ setTimeout(r, 3000); });
-        chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 8192);
+        chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
       }
       chunkTexts.push(chunkResult);
       // Brief pause between chunks to stay within RPM quota
-      if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 1500); });
+      if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 2500); });
     }
 
     var mergedPicksText = chunkTexts.join('\n\n');
