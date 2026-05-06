@@ -431,13 +431,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     </div>
 
     <div class="sidebar-section" style="display:flex;flex-direction:column;gap:8px;">
-      <button class="btn-analyze" id="analyzeBtn" onclick="runAnalysis()" disabled>
-        ANALYZE ALL MATCHUPS →
+      <button class="btn-analyze" id="analyzeBtn" onclick="startAutoRun()" disabled>
+        &#9654;&#9654; ANALYZE ALL MATCHUPS
+      </button>
+      <button class="btn-analyze" id="setupBtn" onclick="setupChunks()" disabled style="background:var(--s3);border-color:var(--blue);color:var(--blue);">
+        &#9776; SETUP MANUAL CHUNKS
       </button>
       <button class="btn-analyze" id="chunkBtn" onclick="runNextChunk()" disabled style="background:var(--s3);border-color:var(--amber);color:var(--amber);display:none;">
-        &#9654; RUN NEXT CHUNK
+        &#9654; RUN CHUNK 1
       </button>
-      <div id="chunkProgress" style="display:none;font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;"></div>
+      <div id="chunkProgress" style="display:none;font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;padding:4px 0;"></div>
       <button class="btn-export visible" id="exportBtn" onclick="exportTxt()" style="display:none;">
         &#8595; EXPORT REPORT AS .TXT
       </button>
@@ -794,6 +797,7 @@ async function scrapeMatchups() {
       listEl.appendChild(pill);
     });
     document.getElementById('analyzeBtn').disabled=false;
+    document.getElementById('setupBtn').disabled=false;
     setStatus(matchups.length+' games loaded. Ready to analyze.');
   } catch(err) {
     statusEl.textContent='Error: '+err.message; statusEl.className='scrape-status error';
@@ -897,7 +901,8 @@ async function runNextChunk() {
     document.getElementById('chunkBtn').style.display = 'none';
     document.getElementById('chunkProgress').style.display = 'none';
     document.getElementById('analyzeBtn').disabled = false;
-    document.getElementById('analyzeBtn').textContent = 'ANALYZE ALL MATCHUPS →';
+    document.getElementById('analyzeBtn').innerHTML = '&#9654;&#9654; ANALYZE ALL MATCHUPS';
+    document.getElementById('setupBtn').disabled = false;
     stopTimer();
   } else {
     updateChunkProgress();
@@ -908,7 +913,11 @@ async function runNextChunk() {
 // ══════════════════════════════════════════════════════
 // RUN ANALYSIS — single Gemini call, MLB data pre-loaded
 // ══════════════════════════════════════════════════════
-async function runAnalysis() {
+// ── Manual chunk mode: fetch stats + setup state, then user clicks chunk by chunk ──
+function setupChunks() { startAutoRun(false); }
+
+async function startAutoRun(autoRun) {
+  if (autoRun === undefined) autoRun = true;
   var key=getKey();
   if (!key)             { alert('Please enter your Gemini API key first.'); return; }
   var bets=selectedBets();
@@ -917,6 +926,7 @@ async function runAnalysis() {
 
   var btn=document.getElementById('analyzeBtn');
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>ANALYZING...';
+  document.getElementById('setupBtn').disabled=true;
   document.getElementById('exportBtn').style.display='none';
   lastReport=''; startTimer();
 
@@ -1056,14 +1066,12 @@ async function runAnalysis() {
       );
     }
 
-    // ── Split matchups into chunks of 3 ──
+    // ── Build chunks and hand off to auto-runner ──
     var CHUNK_SIZE = 3;
     var chunks = [];
     for (var ci = 0; ci < matchups.length; ci += CHUNK_SIZE) {
       chunks.push(matchups.slice(ci, ci + CHUNK_SIZE));
     }
-
-    // Store chunk state globally so runNextChunk() can access it
     _chunkState = {
       chunks: chunks,
       chunkTexts: [],
@@ -1072,47 +1080,55 @@ async function runAnalysis() {
       buildPrompt: buildChunkPrompt
     };
 
-    // Show manual chunk button + progress
-    var chunkBtn = document.getElementById('chunkBtn');
-    chunkBtn.style.display = 'block';
-    updateChunkProgress();
-
-    setStatus('Ready to analyze '+chunks.length+' chunk'+(chunks.length>1?'s':'')+'. Click Run Next Chunk — or wait for auto-run below.', false);
-
-    // Auto-run all chunks sequentially with pause between
-    for (var ci2 = 0; ci2 < chunks.length; ci2++) {
-      setStatus('Analyzing chunk '+(ci2+1)+' of '+chunks.length+'...', true);
-      chunkBtn.disabled = true;
-      var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
-      if (!chunkResult || !chunkResult.trim()) {
-        // Server busy — stop auto-run, let user continue manually
-        stopTimer();
-        setStatus('Server busy on chunk '+(ci2+1)+'. Click "Run Next Chunk" to retry when ready.', false);
-        _chunkState.chunksDone = ci2;
-        updateChunkProgress();
-        btn.disabled=false; btn.innerHTML='ANALYZE ALL MATCHUPS &rarr;';
-        return;
+    if (autoRun) {
+      // ── AUTO mode: run all chunks sequentially ──
+      for (var ci2 = 0; ci2 < chunks.length; ci2++) {
+        setStatus('Analyzing chunk '+(ci2+1)+' of '+chunks.length+'...', true);
+        var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
+        if (!chunkResult || !chunkResult.trim()) {
+          stopTimer();
+          setStatus('\u26A0 Server busy on chunk '+(ci2+1)+'. Switch to Manual Chunks mode to continue one at a time.', false);
+          _chunkState.chunksDone = ci2;
+          updateChunkProgress();
+          var cb=document.getElementById('chunkBtn');
+          cb.style.display='block'; cb.disabled=false;
+          cb.innerHTML='&#9654; RUN CHUNK '+(ci2+1)+' of '+chunks.length;
+          document.getElementById('chunkProgress').style.display='block';
+          document.getElementById('chunkProgress').textContent='Auto-run stopped at chunk '+(ci2+1)+'. Click Run Chunk to continue manually.';
+          btn.disabled=false; btn.innerHTML='&#9654;&#9654; ANALYZE ALL MATCHUPS';
+          document.getElementById('setupBtn').disabled=false;
+          return;
+        }
+        _chunkState.chunkTexts.push(chunkResult);
+        _chunkState.chunksDone = ci2 + 1;
+        renderCards(_chunkState.chunkTexts.join('\n\n'));
+        if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 2500); });
       }
-      _chunkState.chunkTexts.push(chunkResult);
-      _chunkState.chunksDone = ci2 + 1;
-      updateChunkProgress();
-      // Show partial results as each chunk completes
-      renderCards(_chunkState.chunkTexts.join('\n\n'));
-      if (ci2 < chunks.length - 1) await new Promise(function(r){ setTimeout(r, 2500); });
-    }
+      await finalizeAnalysis(_chunkState.chunkTexts, matchups.length);
+      _chunkState = null;
+      btn.disabled=false; btn.innerHTML='&#9654;&#9654; ANALYZE ALL MATCHUPS';
+      document.getElementById('setupBtn').disabled=false;
 
-    await finalizeAnalysis(_chunkState.chunkTexts, matchups.length);
-    _chunkState = null;
-    chunkBtn.style.display = 'none';
-    document.getElementById('chunkProgress').style.display = 'none';
+    } else {
+      // ── MANUAL mode: just show the chunk button, user clicks one at a time ──
+      var cb = document.getElementById('chunkBtn');
+      cb.style.display = 'block';
+      cb.disabled = false;
+      cb.innerHTML = '&#9654; RUN CHUNK 1 of ' + chunks.length;
+      document.getElementById('chunkProgress').style.display = 'block';
+      document.getElementById('chunkProgress').textContent = chunks.length + ' chunks ready — click Run Chunk to run one at a time.';
+      setStatus('Manual mode — '+chunks.length+' chunks. Click Run Chunk to begin.', false);
+      btn.disabled=false; btn.innerHTML='&#9654;&#9654; ANALYZE ALL MATCHUPS';
+    }
 
   } catch(err) {
     stopTimer(); setStatus('Error — check key and try again');
     document.getElementById('output').innerHTML=
       '<div class="err-box">Error: '+escH(err.message)+
       '<br><br>Get a free Gemini key at <a href="https://aistudio.google.com" target="_blank">aistudio.google.com</a></div>';
+    btn.disabled=false; btn.innerHTML='&#9654;&#9654; ANALYZE ALL MATCHUPS';
+    document.getElementById('setupBtn').disabled=false;
   }
-  btn.disabled=false; btn.innerHTML='ANALYZE ALL MATCHUPS &rarr;';
 }
 
 // ── Finalize: best-bet call + render full results ──
