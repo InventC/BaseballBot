@@ -512,8 +512,9 @@ var GEMINI_MODEL = 'gemini-2.5-flash';
 var matchups   = [];
 var lastReport = '';
 var lastCards  = [];
-var timerInt   = null;
-var timerStart = null;
+var timerInt     = null;
+var timerStart   = null;
+var timerElapsed = 0; // accumulated ms across chunks
 
 // ── Park factor lookup ──
 var PARK_FACTORS = {
@@ -556,11 +557,31 @@ function startTimer() {
   timerStart = Date.now();
   var el = document.getElementById('timer');
   el.classList.add('on');
-  timerInt = setInterval(function(){ el.textContent=((Date.now()-timerStart)/1000).toFixed(1)+'s'; }, 100);
+  timerInt = setInterval(function(){
+    var total = timerElapsed + (Date.now() - timerStart);
+    el.textContent = (total/1000).toFixed(1)+'s';
+  }, 100);
+}
+function pauseTimer() {
+  // Stop ticking but accumulate elapsed — call between chunks
+  if (timerInt) { clearInterval(timerInt); timerInt=null; }
+  if (timerStart) timerElapsed += Date.now() - timerStart;
+  var el = document.getElementById('timer');
+  el.textContent = 'Paused — '+(timerElapsed/1000).toFixed(1)+'s';
+  el.classList.remove('on');
 }
 function stopTimer() {
   if (timerInt) { clearInterval(timerInt); timerInt=null; }
-  document.getElementById('timer').textContent='Done in '+((Date.now()-timerStart)/1000).toFixed(1)+'s';
+  var total = timerElapsed + (timerStart ? Date.now() - timerStart : 0);
+  document.getElementById('timer').textContent = 'Done in '+(total/1000).toFixed(1)+'s';
+  document.getElementById('timer').classList.remove('on');
+  timerElapsed = 0; // reset for next run
+}
+function resetTimer() {
+  timerElapsed = 0;
+  timerStart = null;
+  if (timerInt) { clearInterval(timerInt); timerInt=null; }
+  document.getElementById('timer').textContent = '0.0s';
 }
 function setStatus(msg, live) {
   var el = document.getElementById('statusTxt');
@@ -824,6 +845,7 @@ function loadManual() {
     document.getElementById('scrapeStatus').textContent=games.length+' manual matchups loaded.';
     document.getElementById('scrapeStatus').className='scrape-status loaded';
     document.getElementById('analyzeBtn').disabled=false;
+    document.getElementById('setupBtn').disabled=false;
     setStatus(games.length+' manual matchups. Ready to analyze.');
     var listEl=document.getElementById('matchupList'); listEl.innerHTML='';
     games.forEach(function(m){
@@ -870,43 +892,85 @@ function updateChunkProgress() {
 }
 
 async function runNextChunk() {
-  if (!_chunkState) return;
   var btn = document.getElementById('chunkBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spin"></span>RUNNING CHUNK...';
-  var s = _chunkState;
-  var ci = s.chunksDone;
-  if (ci >= s.chunks.length) return;
-
-  setStatus('Analyzing chunk ' + (ci+1) + ' of ' + s.chunks.length + '...', true);
-  var result = await geminiCall(null, s.buildPrompt(s.chunks[ci]), 10000);
-
-  if (!result || !result.trim()) {
-    setStatus('Chunk ' + (ci+1) + ' came back empty — server may be busy. Wait 30s then click Run Next Chunk to retry.', false);
-    btn.disabled = false;
-    btn.innerHTML = '&#9654; RETRY CHUNK ' + (ci+1) + ' of ' + s.chunks.length;
+  if (!_chunkState) {
+    setStatus('No chunk session active — use Setup Manual Chunks first.', false);
     return;
   }
-
-  s.chunkTexts.push(result);
-  s.chunksDone++;
-
-  // Show partial results immediately
-  renderCards(s.chunkTexts.join('\n\n'));
-
-  if (s.chunksDone >= s.chunks.length) {
-    updateChunkProgress();
+  var s = _chunkState;
+  var ci = s.chunksDone;
+  if (ci >= s.chunks.length) {
+    // All done but finalize wasn't called — call it now
     await finalizeAnalysis(s.chunkTexts, s.matchupCount);
     _chunkState = null;
-    document.getElementById('chunkBtn').style.display = 'none';
+    btn.style.display = 'none';
     document.getElementById('chunkProgress').style.display = 'none';
     document.getElementById('analyzeBtn').disabled = false;
     document.getElementById('analyzeBtn').innerHTML = '&#9654;&#9654; ANALYZE ALL MATCHUPS';
     document.getElementById('setupBtn').disabled = false;
     stopTimer();
-  } else {
-    updateChunkProgress();
-    setStatus('Chunk ' + s.chunksDone + ' of ' + s.chunks.length + ' done. Click Run Next Chunk when ready.', false);
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>RUNNING CHUNK ' + (ci+1) + '...';
+  document.getElementById('chunkProgress').textContent = 'Running chunk ' + (ci+1) + ' of ' + s.chunks.length + '...';
+
+  try {
+    startTimer(); // resume accumulated timer
+    setStatus('Analyzing chunk ' + (ci+1) + ' of ' + s.chunks.length + '...', true);
+    var result = await geminiCall(null, s.buildPrompt(s.chunks[ci]), 10000);
+
+    if (!result || !result.trim()) {
+      setStatus('Chunk ' + (ci+1) + ' came back empty — server busy. Wait 30s and click Retry.', false);
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; RETRY CHUNK ' + (ci+1) + ' of ' + s.chunks.length;
+      document.getElementById('chunkProgress').textContent = 'Chunk ' + (ci+1) + ' failed — ready to retry.';
+      return;
+    }
+
+    s.chunkTexts.push(result);
+    s.chunksDone++;
+
+    // Show partial results immediately
+    try { renderCards(s.chunkTexts.join('\n\n')); } catch(e) { console.warn('renderCards error:', e); }
+
+    if (s.chunksDone >= s.chunks.length) {
+      document.getElementById('chunkProgress').textContent = 'All ' + s.chunks.length + ' chunks done — finalizing best bet...';
+      btn.style.display = 'none';
+      try {
+        await finalizeAnalysis(s.chunkTexts, s.matchupCount);
+      } catch(fe) {
+        // finalizeAnalysis failed — still render and import what we have
+        console.warn('finalizeAnalysis error:', fe);
+        var partial = s.chunkTexts.join('\n\n');
+        lastReport = partial;
+        var fc = renderCards(partial);
+        lastCards = fc || [];
+        var fa = importPicksFromAnalysis(fc);
+        document.getElementById('exportBtn').style.display = 'block';
+        setStatus('Best-bet call failed — picks from all chunks still imported (' + fa + ' tracked). ' + fe.message, false);
+      }
+      _chunkState = null;
+      document.getElementById('chunkProgress').style.display = 'none';
+      document.getElementById('analyzeBtn').disabled = false;
+      document.getElementById('analyzeBtn').innerHTML = '&#9654;&#9654; ANALYZE ALL MATCHUPS';
+      document.getElementById('setupBtn').disabled = false;
+      stopTimer();
+    } else {
+      pauseTimer(); // pause between chunks — resumes when next chunk starts
+      btn.disabled = false;
+      btn.innerHTML = '&#9654; RUN CHUNK ' + (s.chunksDone+1) + ' of ' + s.chunks.length;
+      document.getElementById('chunkProgress').textContent = 'Chunk ' + s.chunksDone + ' of ' + s.chunks.length + ' done — ready for next.';
+      setStatus('Chunk ' + s.chunksDone + ' of ' + s.chunks.length + ' complete. Click Run Chunk when ready.', false);
+    }
+
+  } catch(err) {
+    console.error('runNextChunk error:', err);
+    setStatus('Error on chunk ' + (ci+1) + ': ' + err.message, false);
+    btn.disabled = false;
+    btn.innerHTML = '&#9654; RETRY CHUNK ' + (ci+1) + ' of ' + s.chunks.length;
+    document.getElementById('chunkProgress').textContent = 'Error on chunk ' + (ci+1) + ' — click to retry.';
   }
 }
 
@@ -928,7 +992,7 @@ async function startAutoRun(autoRun) {
   btn.disabled=true; btn.innerHTML='<span class="spin"></span>ANALYZING...';
   document.getElementById('setupBtn').disabled=true;
   document.getElementById('exportBtn').style.display='none';
-  lastReport=''; startTimer();
+  lastReport=''; timerElapsed=0; startTimer();
 
   var doML=bets.indexOf('moneyline')>=0, doK=bets.indexOf('strikeouts')>=0;
   var doW=bets.indexOf('walks')>=0,      doR=bets.indexOf('runs')>=0;
@@ -1086,7 +1150,7 @@ async function startAutoRun(autoRun) {
         setStatus('Analyzing chunk '+(ci2+1)+' of '+chunks.length+'...', true);
         var chunkResult = await geminiCall(null, buildChunkPrompt(chunks[ci2]), 10000);
         if (!chunkResult || !chunkResult.trim()) {
-          stopTimer();
+          pauseTimer();
           setStatus('\u26A0 Server busy on chunk '+(ci2+1)+'. Switch to Manual Chunks mode to continue one at a time.', false);
           _chunkState.chunksDone = ci2;
           updateChunkProgress();
@@ -1158,7 +1222,7 @@ async function finalizeAnalysis(chunkTexts, matchupCount) {
   var bbText = bestBetRaw.trim();
 
   function extractField(src, label) {
-    var re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\*\\*[A-Za-z]|^##|---\\s*$|\\Z)', 'im');
+    var re = new RegExp('\\*\\*' + label + ':\\*\\*\\s*([\\s\\S]+?)(?=\\*\\*[A-Za-z]|^##|---\\s*$|$)', 'im');
     var m = src.match(re);
     if (!m) {
       var idx = src.indexOf('**' + label + ':**');
